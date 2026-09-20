@@ -1,0 +1,11 @@
+{
+  "id": "report-outline",
+  "version": "0.1.0",
+  "sections": [
+    { "id": "report-objective", "title": "汇报目标", "required": true },
+    { "id": "progress-and-changes", "title": "进展与变化", "required": true },
+    { "id": "risks-and-impact", "title": "风险与影响", "required": false },
+    { "id": "decisions-needed", "title": "待决定事项", "required": false },
+    { "id": "information-gaps", "title": "信息缺口", "required": true }
+  ]
+}

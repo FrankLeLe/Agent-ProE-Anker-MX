@@ -1,0 +1,35 @@
+{
+  "name": "mixture-x",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.13.0 <25"
+  },
+  "scripts": {
+    "check": "tsc --noEmit && tsc -p web/tsconfig.json",
+    "build:h5": "node scripts/build-h5.ts",
+    "build": "node scripts/build-sites.ts",
+    "migrate:generate": "drizzle-kit generate",
+    "test:sites": "node --test tests/sites-behavior.test.ts",
+    "dev": "node scripts/serve-h5.ts",
+    "test": "node --test tests/*.test.ts",
+    "validate:skills": "node scripts/validate-skills.ts",
+    "evaluate": "node scripts/evaluate.ts"
+  },
+  "dependencies": {
+    "docx": "9.7.1",
+    "pg": "8.23.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20260702.1",
+    "@types/node": "24.13.6",
+    "@types/pg": "8.23.1",
+    "drizzle-kit": "0.31.10",
+    "drizzle-orm": "0.45.2",
+    "esbuild": "0.28.2",
+    "miniflare": "4.20260730.0",
+    "typescript": "7.0.2"
+  }
+}

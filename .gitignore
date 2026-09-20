@@ -1,0 +1,6 @@
+node_modules/
+work/npm-cache/
+work/skills-mcp-implementation/generated/
+.env
+.env.*
+!.env.example

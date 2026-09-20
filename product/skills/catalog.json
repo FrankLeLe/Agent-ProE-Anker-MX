@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "skills": [
+    {
+      "id": "report-outline",
+      "version": "0.1.0",
+      "title": "汇报提纲",
+      "description": "基于当前项目背景、变化和约束，准备带来源、风险及待决定事项的汇报提纲。",
+      "entrypoint": "report-outline/SKILL.md",
+      "template": "report-outline/template.json",
+      "inputContract": "context-bundle.v1",
+      "outputContract": "prepared-artifact.v1",
+      "allowedTools": ["memory.query", "artifact.save"],
+      "exportCapability": "artifact.export-docx"
+    },
+    {
+      "id": "requirements-checklist",
+      "version": "0.1.0",
+      "title": "需求清单",
+      "description": "基于目标、已确认要求和条件，准备保留否定、边界及信息缺口的需求清单。",
+      "entrypoint": "requirements-checklist/SKILL.md",
+      "template": "requirements-checklist/template.json",
+      "inputContract": "context-bundle.v1",
+      "outputContract": "prepared-artifact.v1",
+      "allowedTools": ["memory.query", "artifact.save"],
+      "exportCapability": "artifact.export-docx"
+    }
+  ]
+}

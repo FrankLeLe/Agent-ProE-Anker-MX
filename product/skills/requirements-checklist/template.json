@@ -1,0 +1,11 @@
+{
+  "id": "requirements-checklist",
+  "version": "0.1.0",
+  "sections": [
+    { "id": "objective-and-scope", "title": "目标与范围", "required": true },
+    { "id": "requirements", "title": "需求条目", "required": true },
+    { "id": "constraints-and-exclusions", "title": "约束与不做项", "required": true },
+    { "id": "acceptance-notes", "title": "验收说明", "required": false },
+    { "id": "information-gaps", "title": "待确认事项与信息缺口", "required": true }
+  ]
+}

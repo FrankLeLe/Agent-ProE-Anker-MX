@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { D1Database, R2Bucket } from "@cloudflare/workers-types";
 import { z } from "zod";
 import { DomainError } from "./errors.ts";
-import { addMatterSchema, addRecordSchema, artifactRevisionSchema, confirmExportSchema, exportPlanInputSchema, H5Service, prepareSchema, reviseRecordSchema, suggestionDecisionSchema } from "./h5-service.ts";
+import { addMatterSchema, addRecordSchema, artifactRevisionSchema, assistantAnswerSchema, assistantConfirmSchema, assistantCreateSessionSchema, assistantEvidenceSchema, assistantPlanSchema, assistantRequirementSchema, assistantStartTaskSchema, assistantTaskActionSchema, assistantUpgradeSchema, confirmExportSchema, exportPlanInputSchema, H5Service, prepareSchema, reviseRecordSchema, suggestionDecisionSchema } from "./h5-service.ts";
 import { openSitesState, R2ArtifactStorage } from "./sites-storage.ts";
 import { loadSitesTemplate } from "./sites-templates.ts";
 
@@ -71,10 +71,28 @@ async function route(request: Request, env: SitesEnvironment): Promise<Response>
   }
   const store = await openSitesState(env.DB, ownerKey, new Date().toISOString());
   const service: H5Service = new H5Service(store, {
-    now: () => new Date().toISOString(), mode: "hosted-private", loadTemplate: loadSitesTemplate,
+    now: () => new Date().toISOString(), mode: "hosted-private", ownerId: ownerKey, loadTemplate: loadSitesTemplate,
     storage: new R2ArtifactStorage(env.BUCKET, ownerKey),
   });
-  if (routePath === "/api/state") { method(request, "GET"); return json(service.snapshot(), 200); }
+  if (routePath === "/api/state") { method(request, "GET"); await service.tickAssistantTasks(); return json(service.snapshot(), 200); }
+  if (routePath === "/api/assistant/state") { method(request, "GET"); await service.tickAssistantTasks(); return json(service.snapshot(), 200); }
+  if (routePath === "/api/assistant/sessions") { method(request, "POST"); return json(await service.createAssistantSession(assistantCreateSessionSchema.parse(await body(request))), 200); }
+  const sessionUpgrade = /^\/api\/assistant\/sessions\/([a-zA-Z0-9._:-]+)\/upgrade$/.exec(routePath);
+  if (sessionUpgrade?.[1] !== undefined) { method(request, "POST"); return json(await service.upgradeAssistantSession(sessionUpgrade[1], assistantUpgradeSchema.parse(await body(request))), 200); }
+  const taskStart = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/start$/.exec(routePath);
+  if (taskStart?.[1] !== undefined) { method(request, "POST"); return json(await service.startAssistantTask(taskStart[1], assistantStartTaskSchema.parse(await body(request))), 200); }
+  const taskAnswer = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/answer$/.exec(routePath);
+  if (taskAnswer?.[1] !== undefined) { method(request, "POST"); return json(await service.answerAssistantTask(taskAnswer[1], assistantAnswerSchema.parse(await body(request))), 200); }
+  const taskPlan = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/plan$/.exec(routePath);
+  if (taskPlan?.[1] !== undefined) { method(request, "PATCH"); return json(await service.updateAssistantPlan(taskPlan[1], assistantPlanSchema.parse(await body(request))), 200); }
+  const taskConfirm = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/confirm$/.exec(routePath);
+  if (taskConfirm?.[1] !== undefined) { method(request, "POST"); return json(await service.confirmAssistantTask(taskConfirm[1], assistantConfirmSchema.parse(await body(request))), 200); }
+  const taskAction = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/action$/.exec(routePath);
+  if (taskAction?.[1] !== undefined) { method(request, "POST"); return json(await service.actOnAssistantTask(taskAction[1], assistantTaskActionSchema.parse(await body(request))), 200); }
+  const taskRequirement = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/requirements$/.exec(routePath);
+  if (taskRequirement?.[1] !== undefined) { method(request, "POST"); return json(await service.addAssistantRequirement(taskRequirement[1], assistantRequirementSchema.parse(await body(request))), 200); }
+  const evidence = /^\/api\/assistant\/evidence\/([a-zA-Z0-9._:-]+)$/.exec(routePath);
+  if (evidence?.[1] !== undefined) { method(request, "PATCH"); return json(await service.updateAssistantEvidence(evidence[1], assistantEvidenceSchema.parse(await body(request))), 200); }
   if (routePath === "/api/matters") { method(request, "POST"); return json(await service.addMatter(addMatterSchema.parse(await body(request))), 200); }
   if (routePath === "/api/records") { method(request, "POST"); return json(await service.addRecord(addRecordSchema.parse(await body(request))), 200); }
   const record: RegExpExecArray | null = /^\/api\/records\/([a-zA-Z0-9._:-]+)$/.exec(routePath);

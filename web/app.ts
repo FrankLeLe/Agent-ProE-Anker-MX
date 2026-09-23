@@ -6,7 +6,9 @@
  * timeline-toggle, assistant-start, assistant-stage-back. */
 import type { ContextBundle, PreparedArtifact, SkillId } from "../src/contracts.ts";
 import type { ExportPlanResponse, H5ExportReceipt, H5Matter, H5Record, H5Snapshot, H5Suggestion, RecordModule } from "../src/h5-types.ts";
-import { ApiError, array, exportPlan, exportResult, object, preparation, request, snapshot, string } from "./api.js";
+import { assistantView as assistantV4View, initialAssistantUiState } from "./assistant.js";
+import type { AssistantUiState } from "./assistant.js";
+import { ApiError, array, assistantOperation, exportPlan, exportResult, object, preparation, request, snapshot, string } from "./api.js";
 import type { JsonValue } from "./api.js";
 
 type Tab = "today" | "memory" | "assistant" | "profile";
@@ -22,6 +24,7 @@ interface ViewState {
   snapshot: H5Snapshot | null;
   tab: Tab;
   assistantStage: AssistantStage;
+  assistantUi: AssistantUiState;
   timelineExpanded: boolean;
   backgroundExpanded: boolean;
   filter: ModuleFilter;
@@ -42,13 +45,14 @@ interface ViewState {
   notice: string;
 }
 
-const state: ViewState = { snapshot: null, tab: "today", assistantStage: "overview", timelineExpanded: false, backgroundExpanded: false, filter: "all", search: "", group: "matter", matterId: "", skillId: "report-outline", requirements: "", requirementsByMatter: {}, artifactId: "", artifactVersion: null, drafts: [], recordDraft: { title: "", text: "", module: "work", contextId: "" }, matterDraft: { title: "", goal: "", dueAt: "", duration: "30", participants: "" }, modal: null, busy: null, error: "", notice: "" };
+const state: ViewState = { snapshot: null, tab: "today", assistantStage: "overview", assistantUi: initialAssistantUiState(), timelineExpanded: false, backgroundExpanded: false, filter: "all", search: "", group: "matter", matterId: "", skillId: "report-outline", requirements: "", requirementsByMatter: {}, artifactId: "", artifactVersion: null, drafts: [], recordDraft: { title: "", text: "", module: "work", contextId: "" }, matterDraft: { title: "", goal: "", dueAt: "", duration: "30", participants: "" }, modal: null, busy: null, error: "", notice: "" };
 const tabScroll: Record<Tab, number> = { today: 0, memory: 0, assistant: 0, profile: 0 };
 const assistantHistory: AssistantLocation[] = [];
 const requestIds: Map<string, string> = new Map();
 const storageKey: string = "mx-h5-editing-v1";
 let modalTrigger: HTMLElement | null = null;
 let modalScrollY: number = 0;
+let dismissUndoTimer: number | null = null;
 const modules: { id: RecordModule; label: string; icon: string }[] = [{ id: "work", label: "工作", icon: "briefcase" }, { id: "life", label: "生活", icon: "coffee" }, { id: "social", label: "社交", icon: "users" }, { id: "inspiration", label: "灵感", icon: "lightbulb" }];
 const tabs: { id: Tab; label: string; icon: string }[] = [{ id: "today", label: "今天", icon: "sun" }, { id: "memory", label: "记忆", icon: "layers" }, { id: "assistant", label: "助手", icon: "sparkles" }, { id: "profile", label: "我的", icon: "user" }];
 
@@ -91,7 +95,10 @@ function stale(artifact: PreparedArtifact): boolean {
   const context: ContextBundle | undefined = state.snapshot?.contexts.find((candidate) => candidate.id === artifact.contextBundleId);
   if (context === undefined) return true;
   const references = context.memories.flatMap((memory) => memory.sources);
-  return references.some((ref) => !activeRecords().some((record) => record.id === ref.sourceId && record.revision === ref.revision)) || matterRecords(artifact.contextId).some((record) => !references.some((ref) => ref.sourceId === record.id));
+  const scopedRecords = context.evidenceScope.mode === "selected_record_ids"
+    ? matterRecords(artifact.contextId).filter((record) => context.evidenceScope.recordIds.includes(record.id))
+    : matterRecords(artifact.contextId);
+  return references.some((ref) => !activeRecords().some((record) => record.id === ref.sourceId && record.revision === ref.revision)) || scopedRecords.some((record) => !references.some((ref) => ref.sourceId === record.id));
 }
 function persistDrafts(): void {
   if (state.matterId !== "") state.requirementsByMatter[state.matterId] = state.requirements;
@@ -239,7 +246,7 @@ function artifactView(artifact: PreparedArtifact): string {
 function assistantStageHeader(title: string, matter: H5Matter): string {
   return `<header class="app-detail-header">${button(`${icon("chevron-left", "")}<span>返回</span>`, "assistant-stage-back", "text-button", 'data-testid="assistant-stage-back" aria-label="返回上一页"')}<div><h1>${title}</h1><p>${escape(matter.title)}</p></div></header>`;
 }
-function assistantView(): string {
+function legacyAssistantView(): string {
   const matter: H5Matter | undefined = currentMatter();
   const artifact: PreparedArtifact | undefined = currentArtifact();
   if (matter === undefined) return `${pageHeader("助手", "让下一步，更有准备")}<div class="empty-state"><h2>还没有可准备的事项</h2><p>先添加一件事，再留下一条相关记录。</p>${button("新建准备事项", "new-matter", "secondary-button", 'data-testid="new-matter"')}</div>`;
@@ -248,6 +255,13 @@ function assistantView(): string {
   const history: PreparedArtifact[] = latestArtifacts().filter((item) => item.contextId === state.matterId);
   const recordCount: number = matterRecords(matter.id).length;
   return `${pageHeader("助手", "让下一步，更有准备")}<div class="assistant-layout" data-assistant-stage="overview"><div class="assistant-context"><h2 class="assistant-headline">${escape(matter.title)}，<br>${recordCount > 0 ? "已经有了准备的起点。" : "可以从一条记录开始。"}</h2><p class="assistant-lead">先看一看相关背景，再决定这次需要什么。</p>${backgroundNodes(matter)}<section class="assistant-invite"><h3>${recordCount > 0 ? "我可以帮你整理一版准备稿。" : "为这件事，留下第一条记录。"}</h3><p>${recordCount > 0 ? `从 ${recordCount} 条记录出发，准备汇报提纲或需求清单。` : "记下已知信息与待确认的问题，准备时就有据可查。"}</p>${recordCount > 0 ? button(`和我一起准备${icon("arrow-right", "")}`, "assistant-start", "primary-button full-width", 'data-testid="assistant-start"') : button(`${icon("plus", "small")}添加文字记录`, "add", "primary-button full-width", 'data-testid="assistant-add-record"')}</section><div class="assistant-context-controls"><label class="matter-picker"><span>正在准备的事情</span><select data-field="matter" data-testid="matter-select">${(state.snapshot?.matters ?? []).map((item) => `<option value="${escape(item.id)}" ${item.id === matter.id ? "selected" : ""}>${escape(item.title)}</option>`).join("")}</select></label>${button(`${icon("plus", "small")}新建准备事项`, "new-matter", "text-button new-matter-button", 'data-testid="new-matter"')}</div></div>${history.length > 0 ? `<section class="saved-artifacts"><div class="section-heading"><h2>保存的准备稿</h2><span>${history.length} 份</span></div>${history.map((item) => button(`${icon("file-text", "")}<span><strong>${escape(item.title)}</strong><small>${dateText(item.savedAt, "full")} · 版本 ${item.version}${draftDirty(item) ? " · 有未保存修改" : ""}</small></span>${icon("chevron-right", "small")}`, "select-artifact", `saved-artifact ${item.id === state.artifactId ? "active" : ""}`, `data-id="${escape(item.id)}" data-testid="saved-${escape(item.id)}"`)).join("")}</section>` : ""}</div>`;
+}
+
+function assistantView(): string {
+  if (state.snapshot === null) return "";
+  // The original editable artifact flow remains available after opening an existing result.
+  if (state.assistantStage !== "overview") return legacyAssistantView();
+  return assistantV4View(state.snapshot, state.assistantUi);
 }
 function profileView(): string {
   const snapshotValue: H5Snapshot | null = state.snapshot;
@@ -444,13 +458,190 @@ async function saveRevision(): Promise<void> {
     announce(state.notice);
   });
 }
-async function suggestionDecision(id: string, decision: "snooze" | "dismiss" | "restore"): Promise<void> {
+async function suggestionDecision(id: string, decision: "snooze" | "dismiss" | "restore", snoozeMinutes?: 60 | 180 | 1440): Promise<void> {
   await perform(decision, async () => {
-    setSnapshot(snapshot(await request(`/api/suggestions/${encodeURIComponent(id)}/decision`, "POST", JSON.stringify({ requestId: requestId(`${decision}:${id}:${state.snapshot?.revision}`), decision }))));
-    state.notice = decision === "snooze" ? "已把这次提醒放到稍后，记录仍保留。" : decision === "dismiss" ? "已忽略这次提醒，你仍可在助手中准备。" : "准备提醒已恢复。";
+    const payload = { requestId: requestId(`${decision}:${id}:${snoozeMinutes ?? "default"}:${state.snapshot?.revision}`), decision, ...(snoozeMinutes === undefined ? {} : { snoozeMinutes }) };
+    setSnapshot(snapshot(await request(`/api/suggestions/${encodeURIComponent(id)}/decision`, "POST", JSON.stringify(payload))));
+    if (dismissUndoTimer !== null) { window.clearTimeout(dismissUndoTimer); dismissUndoTimer = null; }
+    state.assistantUi.dismissedSuggestionId = decision === "dismiss" ? id : null;
+    if (decision === "dismiss") {
+      dismissUndoTimer = window.setTimeout(() => {
+        if (state.assistantUi.dismissedSuggestionId !== id) return;
+        state.assistantUi.dismissedSuggestionId = null;
+        render();
+      }, 8_000);
+    }
+    state.notice = decision === "snooze" ? `已延后提醒${snoozeMinutes === 1440 ? "到明天" : snoozeMinutes === 180 ? "到今天稍后" : " 1 小时"}，记录仍保留。` : decision === "dismiss" ? "已忽略这次提醒，你仍可在助手中准备。" : "准备提醒已恢复。";
     render();
     announce(state.notice);
   });
+}
+function assistantContextId(value: string | undefined): string | null {
+  if (value !== undefined && value.length > 0) return value;
+  return currentMatter()?.id ?? null;
+}
+function applyAssistantOperation(value: ReturnType<typeof assistantOperation>): void {
+  setSnapshot(value.snapshot);
+  if (value.sessionId !== null) state.assistantUi.sessionId = value.sessionId;
+  if (value.taskId !== null) state.assistantUi.taskId = value.taskId;
+}
+function openAssistantTask(taskId: string, screen: "task" | "plan-edit" | "details" | "evidence" | "result" | "preview" | "failure" = "task"): void {
+  const task = state.snapshot?.assistant.tasks.find((item) => item.id === taskId);
+  if (task === undefined) { state.error = "该任务已不在当前列表中，请重新读取。"; renderMessages(); return; }
+  state.assistantStage = "overview";
+  state.assistantUi.taskId = task.id;
+  state.assistantUi.sessionId = task.sessionId;
+  state.assistantUi.selectedOptionId = null;
+  state.assistantUi.confirmationRead = false;
+  state.assistantUi.screen = screen;
+  state.assistantUi.modeSheetOpen = false;
+  state.assistantUi.snoozeSuggestionId = null;
+  state.assistantUi.composerExpanded = false;
+  state.assistantUi.addContentSheetOpen = false;
+  state.assistantUi.planStepSheetOpen = false;
+  state.assistantUi.messageDetailId = null;
+  render();
+  window.scrollTo({ top: 0, behavior: "instant" });
+}
+async function sendAssistantMessage(content: string, forcedMode: "task" | null, contextId: string | null): Promise<void> {
+  const text: string = content.trim();
+  if (text.length === 0) { state.error = "先告诉助手你希望完成什么。"; renderMessages(); return; }
+  await perform("assistant-send", async () => {
+    const mode = forcedMode ?? state.assistantUi.selectedMode;
+    const result = assistantOperation(await request("/api/assistant/sessions", "POST", JSON.stringify({ requestId: requestId(JSON.stringify({ action: "assistant-session", mode, text, contextId })), mode, content: text, contextId })));
+    applyAssistantOperation(result);
+    state.assistantUi.composer = "";
+    state.assistantUi.composerExpanded = false;
+    state.assistantUi.addContentSheetOpen = false;
+    state.assistantUi.selectedOptionId = null;
+    state.assistantUi.confirmationRead = false;
+    state.assistantUi.messageDetailId = null;
+    state.assistantUi.screen = result.taskId === null ? "chat" : "task";
+    state.notice = result.taskId === null ? "已保存为一段本地整理对话。" : "已创建任务草稿。请先核对计划，再开始执行。";
+    render();
+    announce(state.notice);
+  });
+}
+async function upgradeAssistantSession(sessionId: string, contextId: string | null): Promise<void> {
+  await perform("assistant-upgrade", async () => {
+    const result = assistantOperation(await request(`/api/assistant/sessions/${encodeURIComponent(sessionId)}/upgrade`, "POST", JSON.stringify({ requestId: requestId(`assistant-upgrade:${sessionId}:${contextId ?? "none"}`), contextId })));
+    applyAssistantOperation(result);
+    if (result.taskId === null) throw new Error("任务草稿未返回，请重新打开对话后再试。");
+    state.assistantUi.screen = "task";
+    state.notice = "已保留对话和依据，任务草稿已经创建。";
+    render();
+    announce(state.notice);
+  });
+}
+async function startAssistantTask(taskId: string): Promise<void> {
+  await perform("assistant-start", async () => {
+    const result = assistantOperation(await request(`/api/assistant/tasks/${encodeURIComponent(taskId)}/start`, "POST", JSON.stringify({ requestId: requestId(`assistant-start:${taskId}`) })));
+    applyAssistantOperation(result);
+    state.assistantUi.screen = "task";
+    state.notice = "任务已开始。本地服务运行期间会持续推进，遇到关键选择会暂停等待你。";
+    render();
+    announce(state.notice);
+  });
+}
+async function updateAssistantDeliveryMode(taskId: string, deliveryMode: "docx" | "content"): Promise<void> {
+  await perform("assistant-plan", async () => {
+    const taskValue = state.snapshot?.assistant.tasks.find((item) => item.id === taskId);
+    const planVersion = taskValue?.planVersion ?? 1;
+    const result = assistantOperation(await request(`/api/assistant/tasks/${encodeURIComponent(taskId)}/plan`, "PATCH", JSON.stringify({ requestId: requestId(`assistant-plan:${taskId}:${planVersion}:${deliveryMode}`), deliveryMode })));
+    applyAssistantOperation(result);
+    state.assistantUi.planFormatSheetOpen = false;
+    state.notice = deliveryMode === "docx" ? "交付格式已更新为 Word；生成文件前仍会请你确认。" : "交付格式已更新为可编辑内容；不会创建或导出文件。";
+    render();
+    announce(state.notice);
+  });
+}
+async function answerAssistantTask(taskId: string, inputRequestId: string, optionId: string): Promise<void> {
+  await perform("assistant-answer", async () => {
+    const result = assistantOperation(await request(`/api/assistant/tasks/${encodeURIComponent(taskId)}/answer`, "POST", JSON.stringify({ requestId: requestId(`assistant-answer:${taskId}:${inputRequestId}:${optionId}`), inputRequestId, optionId })));
+    applyAssistantOperation(result);
+    state.assistantUi.selectedOptionId = null;
+    state.assistantUi.screen = "task";
+    state.notice = "已纳入你的选择，正在准备下一步。";
+    render();
+    announce(state.notice);
+  });
+}
+async function confirmAssistantTask(taskId: string, confirmationId: string, decision: "approved" | "rejected"): Promise<void> {
+  await perform("assistant-confirm", async () => {
+    const result = assistantOperation(await request(`/api/assistant/tasks/${encodeURIComponent(taskId)}/confirm`, "POST", JSON.stringify({ requestId: requestId(`assistant-confirm:${taskId}:${confirmationId}:${decision}`), confirmationId, decision })));
+    applyAssistantOperation(result);
+    state.assistantUi.screen = decision === "approved" ? "result" : "task";
+    state.assistantUi.confirmationRead = false;
+    state.notice = decision === "approved" ? "文件已生成并完成核对。" : "已取消本次文件生成，任务保留在暂停状态。";
+    render();
+    announce(state.notice);
+  });
+}
+async function actOnAssistantTask(taskId: string, taskAction: "pause" | "resume" | "cancel" | "retry"): Promise<void> {
+  await perform("assistant-task-action", async () => {
+    const result = assistantOperation(await request(`/api/assistant/tasks/${encodeURIComponent(taskId)}/action`, "POST", JSON.stringify({ requestId: requestId(`assistant-task-action:${taskId}:${taskAction}`), action: taskAction })));
+    applyAssistantOperation(result);
+    const task = result.snapshot.assistant.tasks.find((item) => item.id === taskId);
+    state.assistantUi.screen = taskAction === "retry" ? "task" : state.assistantUi.screen;
+    state.notice = taskAction === "pause" ? "任务已在当前检查点暂停。" : taskAction === "resume" ? task?.status === "waiting_input" ? "任务已恢复，仍等待你补充信息。" : task?.status === "waiting_confirmation" ? "任务已恢复，仍等待你确认操作。" : "任务已恢复处理。" : taskAction === "cancel" ? "任务已取消，已完成结果仍然保留。" : "正在从可恢复检查点继续。";
+    render();
+    announce(state.notice);
+  });
+}
+async function toggleAssistantEvidence(evidenceId: string, included: boolean): Promise<void> {
+  await perform("assistant-evidence", async () => {
+    const result = assistantOperation(await request(`/api/assistant/evidence/${encodeURIComponent(evidenceId)}`, "PATCH", JSON.stringify({ requestId: requestId(`assistant-evidence:${evidenceId}:${included}`), included })));
+    applyAssistantOperation(result);
+    state.notice = included ? "这条依据已重新纳入。" : "这条依据已排除；尚未完成的任务会重新核对。";
+    render();
+    announce(state.notice);
+  });
+}
+async function addAssistantRequirement(taskId: string, content: string): Promise<void> {
+  const requirement = content.trim();
+  if (requirement.length === 0) { state.error = "先补充要纳入任务的要求。"; renderMessages(); return; }
+  const returnToPlanEdit: boolean = state.assistantUi.screen === "plan-edit";
+  await perform("assistant-requirement", async () => {
+    const result = assistantOperation(await request(`/api/assistant/tasks/${encodeURIComponent(taskId)}/requirements`, "POST", JSON.stringify({ requestId: requestId(`assistant-requirement:${taskId}:${requirement}`), content: requirement })));
+    applyAssistantOperation(result);
+    const task = result.snapshot.assistant.tasks.find((item) => item.id === taskId);
+    state.assistantUi.composer = "";
+    state.assistantUi.composerExpanded = false;
+    state.assistantUi.addContentSheetOpen = false;
+    state.assistantUi.planStepSheetOpen = false;
+    state.assistantUi.planStepTitleDraft = "";
+    state.assistantUi.planStepDetailDraft = "";
+    state.assistantUi.screen = returnToPlanEdit ? "plan-edit" : "task";
+    state.notice = returnToPlanEdit
+      ? "补充步骤已纳入本地内容准备要求；不会因此触发外部操作。"
+      : task?.status === "paused"
+      ? "已纳入新要求；任务已停在安全检查点，请继续处理后生成新结果。"
+      : "已纳入新要求，后续步骤会按这个要求处理。";
+    render();
+    announce(state.notice);
+  });
+}
+async function submitAssistantPlanStep(): Promise<void> {
+  const taskId: string | null = state.assistantUi.taskId;
+  const title: string = state.assistantUi.planStepTitleDraft.trim();
+  const detail: string = state.assistantUi.planStepDetailDraft.trim();
+  if (taskId === null) return;
+  if (title.length === 0 || detail.length === 0) {
+    state.error = "步骤名称和执行说明都需要填写。";
+    renderMessages();
+    return;
+  }
+  await addAssistantRequirement(taskId, `补充执行步骤：${title}\n${detail}`);
+}
+function openAssistantArtifact(artifactId: string): void {
+  const artifact = state.snapshot?.artifacts.filter((item) => item.id === artifactId).sort((left, right) => right.version - left.version)[0];
+  if (artifact === undefined) { state.error = "当前还没有可打开的任务成果。"; renderMessages(); return; }
+  state.artifactId = artifact.id;
+  state.artifactVersion = artifact.version;
+  state.assistantStage = "artifact";
+  assistantHistory.push({ stage: "overview", scrollY: 0 });
+  render();
+  window.scrollTo({ top: 0, behavior: "instant" });
 }
 async function reviewExport(): Promise<void> {
   const artifact: PreparedArtifact | undefined = currentArtifact();
@@ -539,7 +730,169 @@ async function action(target: HTMLElement): Promise<void> {
   if (name === "tab") { const tab: string = target.dataset.tab ?? ""; if (tab === "today" || tab === "memory" || tab === "assistant" || tab === "profile") switchTab(tab); return; }
   if (name === "close-modal" || name === "backdrop") { closeModal(); return; }
   if (name === "dismiss-error") { state.error = ""; renderMessages(); return; }
+  if (name === "assistant-open-mode-sheet") { state.assistantUi.modeSheetOpen = true; state.assistantUi.snoozeSuggestionId = null; state.assistantUi.addContentSheetOpen = false; render(); return; }
+  if (name === "assistant-close-mode-sheet") { state.assistantUi.modeSheetOpen = false; render(); return; }
+  if (name === "assistant-open-snooze-sheet") { const suggestionId = target.dataset.suggestionId; if (suggestionId !== undefined) { state.assistantUi.snoozeSuggestionId = suggestionId; state.assistantUi.modeSheetOpen = false; render(); } return; }
+  if (name === "assistant-close-snooze-sheet") { state.assistantUi.snoozeSuggestionId = null; render(); return; }
+  if (name === "assistant-open-add-content-sheet") { state.assistantUi.addContentSheetOpen = true; state.assistantUi.modeSheetOpen = false; render(); return; }
+  if (name === "assistant-close-add-content-sheet") { state.assistantUi.addContentSheetOpen = false; render(); return; }
+  if (name === "assistant-add-plan-step") {
+    const taskId = target.dataset.taskId;
+    if (taskId !== undefined) {
+      state.assistantUi.taskId = taskId;
+      state.assistantUi.planStepTitleDraft = "";
+      state.assistantUi.planStepDetailDraft = "";
+      state.assistantUi.planStepSheetOpen = true;
+      render();
+      window.requestAnimationFrame(() => document.querySelector<HTMLInputElement>('[data-assistant-field="plan-step-title"]')?.focus({ preventScroll: true }));
+    }
+    return;
+  }
+  if (name === "assistant-close-plan-step") { state.assistantUi.planStepSheetOpen = false; render(); return; }
+  if (name === "assistant-open-plan-format") {
+    const taskId = target.dataset.taskId;
+    if (taskId !== undefined) { state.assistantUi.taskId = taskId; state.assistantUi.planLocationSheetOpen = false; state.assistantUi.planFormatSheetOpen = true; render(); }
+    return;
+  }
+  if (name === "assistant-close-plan-format") { state.assistantUi.planFormatSheetOpen = false; render(); return; }
+  if (name === "assistant-open-plan-location") {
+    const taskId = target.dataset.taskId;
+    if (taskId !== undefined) { state.assistantUi.taskId = taskId; state.assistantUi.planFormatSheetOpen = false; state.assistantUi.planLocationSheetOpen = true; render(); }
+    return;
+  }
+  if (name === "assistant-close-plan-location") { state.assistantUi.planLocationSheetOpen = false; render(); return; }
+  if (name === "assistant-expand-composer") {
+    state.assistantUi.composerExpanded = true;
+    render();
+    window.requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('textarea[data-assistant-field="composer"]')?.focus({ preventScroll: true }));
+    return;
+  }
+  if (name === "assistant-select-mode") {
+    const mode = target.dataset.mode;
+    if (mode === "auto" || mode === "chat" || mode === "task") { state.assistantUi.selectedMode = mode; render(); }
+    return;
+  }
+  if (name === "assistant-home-tab") {
+    const tab = target.dataset.homeTab;
+    if (tab === "suggested" || tab === "active" || tab === "completed") { state.assistantUi.homeTab = tab; render(); }
+    return;
+  }
+  if (name === "assistant-task-filter") {
+    const filter = target.dataset.taskFilter;
+    if (filter === "all" || filter === "waiting" || filter === "running") { state.assistantUi.taskFilter = filter; render(); }
+    return;
+  }
+  if (name === "assistant-back-home") { state.assistantStage = "overview"; state.assistantUi.screen = "home"; state.assistantUi.modeSheetOpen = false; state.assistantUi.snoozeSuggestionId = null; state.assistantUi.composerExpanded = false; state.assistantUi.addContentSheetOpen = false; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "assistant-back-task") { state.assistantUi.screen = "task"; state.assistantUi.composerExpanded = false; state.assistantUi.addContentSheetOpen = false; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "assistant-back-result") { state.assistantUi.screen = "result"; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "assistant-back-chat") { state.assistantStage = "overview"; state.assistantUi.screen = state.assistantUi.sessionId === null ? "home" : "chat"; state.assistantUi.composerExpanded = false; state.assistantUi.addContentSheetOpen = false; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "assistant-settings") { state.assistantStage = "overview"; state.assistantUi.screen = "permissions"; state.assistantUi.modeSheetOpen = false; state.assistantUi.composerExpanded = false; state.assistantUi.addContentSheetOpen = false; render(); return; }
+  if (name === "assistant-more") { state.assistantStage = "overview"; state.assistantUi.screen = "tasks"; state.assistantUi.composerExpanded = false; state.assistantUi.addContentSheetOpen = false; render(); return; }
+  if (name === "assistant-capability-unavailable") { state.assistantUi.addContentSheetOpen = false; state.notice = `${target.dataset.capability ?? "该能力"}尚未接入；本次不会请求授权或打开外部账号。`; render(); announce(state.notice); return; }
+  if (name === "assistant-undo-dismiss") { const suggestionId = target.dataset.suggestionId; if (suggestionId !== undefined) await suggestionDecision(suggestionId, "restore"); return; }
   if (state.busy !== null) return;
+  if (name === "assistant-create-default-task") {
+    const contextId = assistantContextId(target.dataset.contextId);
+    const subject = state.snapshot?.matters.find((item) => item.id === contextId);
+    await sendAssistantMessage(`准备${subject?.title ?? "这件事"}的汇报结构`, "task", contextId);
+    return;
+  }
+  if (name === "assistant-send") {
+    const taskId = target.dataset.taskId;
+    if (taskId !== undefined && taskId.length > 0) await addAssistantRequirement(taskId, state.assistantUi.composer);
+    else await sendAssistantMessage(state.assistantUi.composer, null, assistantContextId(undefined));
+    return;
+  }
+  if (name === "assistant-use-prompt") { await sendAssistantMessage(target.dataset.prompt ?? "", null, assistantContextId(undefined)); return; }
+  if (name === "assistant-composer-search") { state.notice = "当前会在已选事项的记录范围内整理；全局检索尚未接入。"; renderMessages(); return; }
+  if (name === "assistant-open-task") {
+    const taskId = target.dataset.taskId;
+    const requestedScreen = target.dataset.taskScreen;
+    const screen = requestedScreen === "plan-edit" || requestedScreen === "details" || requestedScreen === "evidence" || requestedScreen === "result" || requestedScreen === "preview" || requestedScreen === "failure" || requestedScreen === "task" ? requestedScreen : "task";
+    if (taskId !== undefined) openAssistantTask(taskId, screen);
+    return;
+  }
+  if (name === "assistant-open-plan-edit") { const taskId = target.dataset.taskId; if (taskId !== undefined) openAssistantTask(taskId, "plan-edit"); return; }
+  if (name === "assistant-open-evidence") { const taskId = target.dataset.taskId; if (taskId !== undefined) openAssistantTask(taskId, "evidence"); return; }
+  if (name === "assistant-open-result") { const taskId = target.dataset.taskId; if (taskId !== undefined) openAssistantTask(taskId, "result"); return; }
+  if (name === "assistant-open-preview") { const taskId = target.dataset.taskId; if (taskId !== undefined) openAssistantTask(taskId, "preview"); return; }
+  if (name === "assistant-open-message-detail") { const messageId = target.dataset.messageId; if (messageId !== undefined) { state.assistantUi.messageDetailId = messageId; render(); } return; }
+  if (name === "assistant-close-message-detail") { state.assistantUi.messageDetailId = null; render(); return; }
+  if (name === "assistant-select-plan-format") {
+    const taskId = target.dataset.taskId;
+    const deliveryMode = target.dataset.deliveryMode;
+    if (taskId !== undefined && (deliveryMode === "docx" || deliveryMode === "content")) await updateAssistantDeliveryMode(taskId, deliveryMode);
+    return;
+  }
+  if (name === "assistant-copy-message") {
+    const messageId = target.dataset.messageId;
+    const message = state.snapshot?.assistant.messages.find((item) => item.id === messageId && item.role === "assistant");
+    if (message !== undefined) {
+      try { await navigator.clipboard.writeText(message.content); state.notice = "整理内容已复制。"; }
+      catch { state.error = "当前浏览器不允许访问剪贴板；你仍可以在这里查看完整内容。"; }
+      renderMessages();
+    }
+    return;
+  }
+  if (name === "assistant-save-message-memory") {
+    const messageId = target.dataset.messageId;
+    const message = state.snapshot?.assistant.messages.find((item) => item.id === messageId && item.role === "assistant");
+    const session = state.snapshot?.assistant.sessions.find((item) => item.id === message?.sessionId);
+    if (message === undefined || session === undefined) { state.error = "找不到这条整理内容，请刷新后重试。"; renderMessages(); return; }
+    if (state.recordDraft.title.trim() !== "" || state.recordDraft.text.trim() !== "") { state.error = "当前有未保存的记录草稿；请先处理草稿，再保存这条整理。"; renderMessages(); return; }
+    const contextId = session.contextId ?? currentMatter()?.id ?? state.snapshot?.matters[0]?.id ?? "";
+    if (contextId === "") { state.error = "请先创建一个事项，再把整理内容保存到记忆。"; renderMessages(); return; }
+    state.recordDraft = { title: `${session.title.slice(0, 180)} · 助手整理`, text: message.content, module: "work", contextId };
+    openModal({ kind: "add" });
+    window.requestAnimationFrame(() => document.querySelector<HTMLInputElement>('[data-testid="record-title"]')?.focus({ preventScroll: true }));
+    return;
+  }
+  if (name === "assistant-open-upgrade") { const sessionId = target.dataset.sessionId; if (sessionId !== undefined) { state.assistantUi.sessionId = sessionId; state.assistantUi.screen = "upgrade"; render(); } return; }
+  if (name === "assistant-upgrade-confirm") { const sessionId = target.dataset.sessionId; if (sessionId !== undefined) await upgradeAssistantSession(sessionId, assistantContextId(target.dataset.contextId)); return; }
+  if (name === "assistant-start-task") { const taskId = target.dataset.taskId; if (taskId !== undefined) await startAssistantTask(taskId); return; }
+  if (name === "assistant-select-option") { const optionId = target.dataset.optionId; if (optionId !== undefined) { state.assistantUi.selectedOptionId = optionId; render(); } return; }
+  if (name === "assistant-submit-option") { const taskId = target.dataset.taskId; const inputRequestId = target.dataset.inputRequestId; const optionId = state.assistantUi.selectedOptionId; if (taskId !== undefined && inputRequestId !== undefined && optionId !== null) await answerAssistantTask(taskId, inputRequestId, optionId); return; }
+  if (name === "assistant-approve-confirmation" || name === "assistant-reject-confirmation") {
+    if (name === "assistant-approve-confirmation" && !state.assistantUi.confirmationRead) { state.error = "请先勾选“我已核对内容和文件范围”，再确认生成文件。"; renderMessages(); return; }
+    const taskId = target.dataset.taskId;
+    const confirmationId = target.dataset.confirmationId;
+    if (taskId !== undefined && confirmationId !== undefined) await confirmAssistantTask(taskId, confirmationId, name === "assistant-approve-confirmation" ? "approved" : "rejected");
+    return;
+  }
+  if (name === "assistant-task-action") {
+    const taskId = target.dataset.taskId;
+    const taskAction = target.dataset.taskAction;
+    if (taskId !== undefined && (taskAction === "pause" || taskAction === "resume" || taskAction === "cancel" || taskAction === "retry")) await actOnAssistantTask(taskId, taskAction);
+    return;
+  }
+  if (name === "assistant-toggle-evidence") { const evidenceId = target.dataset.evidenceId; if (evidenceId !== undefined) await toggleAssistantEvidence(evidenceId, target.dataset.included === "true"); return; }
+  if (name === "assistant-open-artifact") { const artifactId = target.dataset.artifactId; if (artifactId !== undefined && artifactId.length > 0) openAssistantArtifact(artifactId); return; }
+  if (name === "assistant-open-suggestion-evidence") {
+    const contextId = target.dataset.contextId;
+    const matching = state.snapshot?.assistant.tasks.find((item) => item.contextId === contextId && item.status !== "cancelled");
+    if (matching !== undefined) openAssistantTask(matching.id, "evidence");
+    else { state.notice = "开始这个任务后，可以查看并调整它实际使用的依据。"; renderMessages(); }
+    return;
+  }
+  if (name === "assistant-set-snooze") {
+    const suggestionId = target.dataset.suggestionId;
+    const minutes = Number(target.dataset.snoozeMinutes);
+    const snoozeMinutes: 60 | 180 | 1440 | null = minutes === 60 || minutes === 180 || minutes === 1440 ? minutes : null;
+    if (suggestionId !== undefined && snoozeMinutes !== null) { state.assistantUi.snoozeSuggestionId = null; await suggestionDecision(suggestionId, "snooze", snoozeMinutes); }
+    return;
+  }
+  if (name === "assistant-snooze-suggestion" || name === "assistant-dismiss-suggestion") { const suggestionId = target.dataset.suggestionId; if (suggestionId !== undefined) await suggestionDecision(suggestionId, name === "assistant-snooze-suggestion" ? "snooze" : "dismiss"); return; }
+  if (name === "assistant-share-result") {
+    const taskId = target.dataset.taskId;
+    const task = state.snapshot?.assistant.tasks.find((item) => item.id === taskId);
+    const artifact = task?.artifactId === null ? undefined : state.snapshot?.artifacts.find((item) => item.id === task?.artifactId);
+    if (task !== undefined && "share" in navigator) {
+      try { await navigator.share({ title: artifact?.title ?? "Mixture X 任务结果", text: "这是我在 Mixture X 中完成的一项任务结果。" }); state.notice = "已打开系统分享面板。"; }
+      catch (error) { if (!(error instanceof DOMException && error.name === "AbortError")) state.error = "无法打开系统分享面板，请先下载文件后使用系统分享。"; }
+    } else state.notice = "当前浏览器不支持系统分享，请先下载文件后使用系统分享。";
+    renderMessages();
+    return;
+  }
   if (name === "refresh") await refreshState();
   else if (name === "add") openModal({ kind: "add" });
   else if (name === "calendar") openModal({ kind: "calendar" });
@@ -571,14 +924,26 @@ document.addEventListener("click", (event: MouseEvent) => {
   const original: EventTarget | null = event.target;
   if (!(original instanceof Element)) return;
   const target: HTMLElement | null = original.closest<HTMLElement>("[data-action]");
+  const stop: HTMLElement | null = original.closest<HTMLElement>("[data-action-stop]");
+  if (stop !== null && target !== null && !stop.contains(target)) return;
   if (target === null || (target.dataset.action === "backdrop" && target !== original)) return;
   event.preventDefault();
   void action(target);
 });
-document.addEventListener("submit", (event: SubmitEvent) => { if (event.target instanceof HTMLFormElement && event.target.dataset.form !== undefined) { event.preventDefault(); if (event.target.dataset.form === "new-matter") void submitMatter(event.target); else void submitRecord(event.target); } });
+document.addEventListener("submit", (event: SubmitEvent) => {
+  if (!(event.target instanceof HTMLFormElement) || event.target.dataset.form === undefined) return;
+  event.preventDefault();
+  if (event.target.dataset.form === "assistant-plan-step") void submitAssistantPlanStep();
+  else if (event.target.dataset.form === "new-matter") void submitMatter(event.target);
+  else void submitRecord(event.target);
+});
 document.addEventListener("input", (event: Event) => {
   const target: EventTarget | null = event.target;
   if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
+  if (target.dataset.assistantField === "composer") { state.assistantUi.composer = target.value; return; }
+  if (target.dataset.assistantField === "plan-step-title") { state.assistantUi.planStepTitleDraft = target.value; return; }
+  if (target.dataset.assistantField === "plan-step-detail") { state.assistantUi.planStepDetailDraft = target.value; return; }
+  if (target instanceof HTMLInputElement && target.dataset.assistantField === "confirmation-read") { state.assistantUi.confirmationRead = target.checked; render(); return; }
   const field: string = target.dataset.field ?? "";
   if (field === "search") { state.search = target.value; element("memory-results").innerHTML = memoryResults(); return; }
   if (field === "requirements") state.requirements = target.value;
@@ -602,6 +967,17 @@ document.addEventListener("input", (event: Event) => {
   }
   persistDrafts();
 });
+document.addEventListener("focusin", (event: FocusEvent) => {
+  const target: EventTarget | null = event.target;
+  if (!(target instanceof HTMLInputElement) || target.dataset.assistantField !== "composer" || state.assistantUi.composerExpanded) return;
+  state.assistantUi.composerExpanded = true;
+  render();
+  window.requestAnimationFrame(() => {
+    const editor: HTMLTextAreaElement | null = document.querySelector('textarea[data-assistant-field="composer"]');
+    editor?.focus({ preventScroll: true });
+    editor?.setSelectionRange(editor.value.length, editor.value.length);
+  });
+});
 document.addEventListener("change", (event: Event) => {
   const target: EventTarget | null = event.target;
   if (!(target instanceof HTMLSelectElement)) return;
@@ -614,6 +990,29 @@ document.addEventListener("toggle", (event: Event) => {
   if (event.target instanceof HTMLDetailsElement && event.target.dataset.testid === "background-sources" && event.target.isConnected) state.backgroundExpanded = event.target.open;
 }, true);
 document.addEventListener("keydown", (event: KeyboardEvent) => {
+  if (event.key === "Escape" && (state.assistantUi.planStepSheetOpen || state.assistantUi.planFormatSheetOpen || state.assistantUi.planLocationSheetOpen || state.assistantUi.messageDetailId !== null)) {
+    event.preventDefault();
+    state.assistantUi.planStepSheetOpen = false;
+    state.assistantUi.planFormatSheetOpen = false;
+    state.assistantUi.planLocationSheetOpen = false;
+    state.assistantUi.messageDetailId = null;
+    render();
+    return;
+  }
+  if (event.key === "Escape" && event.target instanceof HTMLTextAreaElement && event.target.dataset.assistantField === "composer") {
+    event.preventDefault();
+    state.assistantUi.composerExpanded = false;
+    state.assistantUi.addContentSheetOpen = false;
+    render();
+    return;
+  }
+  if (event.key === "Enter" && event.target instanceof HTMLInputElement && event.target.dataset.assistantField === "composer") {
+    event.preventDefault();
+    const taskId = event.target.dataset.taskId;
+    if (taskId !== undefined && taskId.length > 0) void addAssistantRequirement(taskId, state.assistantUi.composer);
+    else void sendAssistantMessage(state.assistantUi.composer, null, assistantContextId(undefined));
+    return;
+  }
   if (state.modal === null) return;
   if (event.key === "Escape") { event.preventDefault(); closeModal(); return; }
   if (event.key !== "Tab") return;
@@ -642,7 +1041,13 @@ async function refreshInBackground(): Promise<void> {
     const changed: boolean = updated.revision !== state.snapshot.revision || JSON.stringify(updated.suggestions) !== JSON.stringify(state.snapshot.suggestions);
     setSnapshot(updated);
     if (!changed) return;
+    const editingAssistantInput: boolean = document.activeElement instanceof HTMLElement && document.activeElement.dataset.assistantField === "composer";
     if ((state.tab === "today" || state.tab === "profile") && state.modal === null) render();
+    else if (state.tab === "assistant" && state.assistantStage === "overview" && state.modal === null && !editingAssistantInput) {
+      const scrollY: number = window.scrollY;
+      render();
+      window.scrollTo({ top: scrollY, behavior: "instant" });
+    }
     else {
       state.notice = "记录与提醒有更新。你的编辑仍保留，切换页签后可看到最新内容。";
       renderMessages();
@@ -654,5 +1059,9 @@ async function refreshInBackground(): Promise<void> {
   }
 }
 window.setInterval(() => { void refreshInBackground(); }, 60_000);
+window.setInterval(() => {
+  const running: boolean = state.snapshot?.assistant.tasks.some((task) => task.status === "running") ?? false;
+  if (running) void refreshInBackground();
+}, 1_000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") void refreshInBackground(); });
 void start();

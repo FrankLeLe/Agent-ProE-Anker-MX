@@ -16,19 +16,41 @@ export function matterFromState(state: LocalState, id: string): H5Matter {
   return matter;
 }
 
-export function currentContext(state: LocalState, matter: H5Matter, requirements: string[], now: string): ContextBundle {
-  const evidence = evidenceFromRecords(state.records, state.recordHistory);
+function selectedRecordIds(recordIds: readonly string[] | undefined): string[] | undefined {
+  return recordIds === undefined ? undefined : [...new Set(recordIds)].sort();
+}
+
+function scopedEvidence(state: LocalState, ownerId: string, recordIds: readonly string[] | undefined) {
+  const selected: string[] | undefined = selectedRecordIds(recordIds);
+  const permitted: Set<string> | undefined = selected === undefined ? undefined : new Set(selected);
+  const records = permitted === undefined ? state.records : state.records.filter((record) => permitted.has(record.id));
+  const history = permitted === undefined ? state.recordHistory : state.recordHistory.filter((record) => permitted.has(record.id));
+  return evidenceFromRecords(records, history, ownerId);
+}
+
+export function evidenceForContext(state: LocalState, context: ContextBundle) {
+  const selected = context.evidenceScope.mode === "selected_record_ids" ? context.evidenceScope.recordIds : undefined;
+  return scopedEvidence(state, context.ownerId, selected);
+}
+
+export function currentContext(state: LocalState, matter: H5Matter, requirements: string[], now: string, ownerId: string = LOCAL_OWNER, recordIds: readonly string[] | undefined = undefined): ContextBundle {
+  const selected: string[] | undefined = selectedRecordIds(recordIds);
+  const evidence = scopedEvidence(state, ownerId, selected);
   return buildContextBundle({
-    id: `context-${randomUUID()}`, ownerId: LOCAL_OWNER, contextId: matter.id, goal: matter.goal,
+    id: `context-${randomUUID()}`, ownerId, contextId: matter.id, goal: matter.goal,
     userRequirements: requirements,
     gaps: ["规则只整理已输入的文字，不核实实际进度、人员身份或事项承诺；未明确给出的信息仍待确认。"],
+    evidenceScope: selected === undefined
+      ? { mode: "all_active_context_records", recordIds: [] }
+      : { mode: "selected_record_ids", recordIds: selected },
   }, evidence.sources, evidence.memories, now);
 }
 
 export function assertFullContextCurrent(state: LocalState, context: ContextBundle, now: string): void {
-  const evidence = evidenceFromRecords(state.records, state.recordHistory);
+  const evidence = evidenceForContext(state, context);
   assertContextCurrent(context, evidence.sources, evidence.memories, now);
-  const current: ContextBundle = currentContext(state, matterFromState(state, context.contextId), context.userRequirements, now);
+  const selected = context.evidenceScope.mode === "selected_record_ids" ? context.evidenceScope.recordIds : undefined;
+  const current: ContextBundle = currentContext(state, matterFromState(state, context.contextId), context.userRequirements, now, context.ownerId, selected);
   if (JSON.stringify(current.memories) !== JSON.stringify(context.memories)) {
     throw new DomainError("STALE_CONTEXT", "相关来源已增加、修订或失效；请重新准备后再编辑或导出，原稿仍作为历史版本保留。", 409);
   }
@@ -53,9 +75,17 @@ export function suggestionsFromState(state: LocalState, now: string): H5Suggesti
       const prepared: PreparedArtifact | undefined = [...state.artifacts].reverse().find((artifact) => artifact.contextId === matter.id && artifactIsCurrent(state, artifact, now));
       const muted: boolean = decision !== undefined && (decision.state === "dismissed" || (decision.snoozedUntil !== null && Date.parse(decision.snoozedUntil) > Date.parse(now)));
       const changed: number = records.filter((record) => record.revision > 1).length;
+      const discussion: boolean = /同步|会议|汇报/.test(`${matter.title} ${matter.goal}`);
+      const deliverable: string = discussion ? "汇报结构" : "准备建议";
+      const chinaDay = (value: string): string => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(value));
+      const allRecordsToday: boolean = records.length > 0 && records.every((record) => chinaDay(record.recordedAt) === chinaDay(now));
+      const iterations: number = Math.max(0, records.length - 1);
+      const reason: string = discussion && allRecordsToday
+        ? `今天的讨论已持续${iterations}次相关迭代${changed > 0 ? `，并有${changed}条有效修订` : ""}。我可以先帮你整理一版${deliverable}，看看是否符合预期。`
+        : `根据${records.length}条相关记录${changed > 0 ? `（含${changed}条修订）` : ""}，我可以先帮你整理一版${deliverable}，看看是否符合预期。`;
       return [{
-        id: `suggestion-${matter.id}`, matterId: matter.id, title: `为「${matter.title}」提前准备`,
-        reason: `事项将在 ${new Date(matter.dueAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })} 开始；已有 ${records.length} 条相关背景，其中 ${changed} 条有修订。按本地规则整理一份可编辑准备稿。`,
+        id: `suggestion-${matter.id}`, matterId: matter.id, title: `准备${matter.title}`,
+        reason,
         dueAt: matter.dueAt, sourceIds: records.map((record) => record.id),
         state: muted && decision !== undefined ? decision.state : prepared !== undefined ? "prepared" : "available",
         snoozedUntil: muted && decision?.state === "snoozed" ? decision.snoozedUntil : null, artifactId: prepared?.id ?? null,
@@ -105,7 +135,7 @@ export function prepareFromTemplate(context: ContextBundle, template: ArtifactTe
     return { id: section.id, title: section.title, blocks };
   });
   return validatePreparedArtifact({
-    contract: "prepared-artifact.v1", id: `artifact-${randomUUID()}`, ownerId: LOCAL_OWNER, contextId: context.contextId,
+    contract: "prepared-artifact.v1", id: `artifact-${randomUUID()}`, ownerId: context.ownerId, contextId: context.contextId,
     skillId: template.id, version: 1, previousVersion: null, contextBundleId: context.id,
     title: `${matter.title} · ${template.id === "report-outline" ? "汇报提纲" : "需求清单"}`,
     userRequirements: [...context.userRequirements], sections, savedAt: now,

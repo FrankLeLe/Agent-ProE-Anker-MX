@@ -1,6 +1,6 @@
 /** Build task-scoped evidence snapshots without treating similarity as authorization. */
 import { contextBundleSchema, memorySchema, sourceSchema } from "./contracts.ts";
-import type { ContextBundle, Memory, Source } from "./contracts.ts";
+import type { ContextBundle, ContextEvidenceScope, Memory, Source } from "./contracts.ts";
 import { DomainError } from "./errors.ts";
 
 export interface ContextRequest {
@@ -10,6 +10,7 @@ export interface ContextRequest {
   goal: string;
   userRequirements: readonly string[];
   gaps: readonly string[];
+  evidenceScope?: ContextEvidenceScope;
 }
 
 function activeMemories(ownerId: string, contextId: string, sources: readonly Source[], memories: readonly Memory[], now: string): Memory[] {
@@ -49,6 +50,7 @@ export function buildContextBundle(request: ContextRequest, sources: readonly So
     contract: "context-bundle.v1", id: request.id, ownerId: request.ownerId, contextId: request.contextId,
     createdAt: now, goal: request.goal, userRequirements: [...request.userRequirements],
     memories: activeMemories(request.ownerId, request.contextId, sources, memories, now), gaps: [...request.gaps],
+    evidenceScope: request.evidenceScope ?? { mode: "all_active_context_records", recordIds: [] },
   });
 }
 

@@ -5,7 +5,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import path from "node:path";
 import { z } from "zod";
 import { DomainError } from "./errors.ts";
-import { addMatterSchema, addRecordSchema, artifactRevisionSchema, confirmExportSchema, exportPlanInputSchema, prepareSchema, reviseRecordSchema, suggestionDecisionSchema } from "./h5-service.ts";
+import { addMatterSchema, addRecordSchema, artifactRevisionSchema, assistantAnswerSchema, assistantConfirmSchema, assistantCreateSessionSchema, assistantEvidenceSchema, assistantPlanSchema, assistantRequirementSchema, assistantStartTaskSchema, assistantTaskActionSchema, assistantUpgradeSchema, confirmExportSchema, exportPlanInputSchema, prepareSchema, reviseRecordSchema, suggestionDecisionSchema } from "./h5-service.ts";
 import { createH5Service } from "./h5-local-service.ts";
 import type { H5Service, H5ServiceOptions } from "./h5-service.ts";
 import type { H5ErrorResponse } from "./h5-types.ts";
@@ -74,6 +74,11 @@ async function staticFile(workspaceRoot: string, pathname: string): Promise<{ by
   let relative: string;
   let type: string;
   if (pathname === "/" || pathname === "/index.html") { directory = "web"; relative = "index.html"; type = "text/html; charset=utf-8"; }
+  else if (pathname === "/_preview/iphone") { directory = "web"; relative = "iphone-preview.html"; type = "text/html; charset=utf-8"; }
+  else if (pathname === "/_preview/iphone.css") { directory = "web"; relative = "iphone-preview.css"; type = "text/css; charset=utf-8"; }
+  else if (pathname === "/_preview/iphone.js") { directory = "web"; relative = "iphone-preview.js"; type = "text/javascript; charset=utf-8"; }
+  else if (pathname === "/_preview/iphone/Bezel.png") { directory = "scripts/assets/iphone"; relative = "Bezel.png"; type = "image/png"; }
+  else if (pathname === "/_preview/iphone/status-icons.svg") { directory = "scripts/assets/iphone"; relative = "ios-status-icons.svg"; type = "image/svg+xml"; }
   else if (pathname === "/styles.css") { directory = "web"; relative = "styles.css"; type = "text/css; charset=utf-8"; }
   else if (/^\/[a-zA-Z0-9_-]+\.js$/.test(pathname)) { directory = "work/h5-build"; relative = pathname.slice(1); type = "text/javascript; charset=utf-8"; }
   else if (/^\/assets\/[a-zA-Z0-9_./-]+\.(png|jpg|jpeg|webp|svg|avif)$/.test(pathname)) {
@@ -94,9 +99,29 @@ async function route(request: IncomingMessage, response: ServerResponse, service
   const pathname: string = requestPath(request);
   response.setHeader("x-content-type-options", "nosniff");
   response.setHeader("referrer-policy", "no-referrer");
-  response.setHeader("content-security-policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+  const previewShell: boolean = pathname === "/_preview/iphone";
+  const appDocument: boolean = pathname === "/" || pathname === "/index.html";
+  response.setHeader("content-security-policy", `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-src ${previewShell ? "'self'" : "'none'"}; base-uri 'none'; form-action 'self'; frame-ancestors ${appDocument ? "'self'" : "'none'"}`);
   if (!["GET", "POST", "PATCH"].includes(request.method ?? "")) throw new DomainError("METHOD_NOT_ALLOWED", "Local H5 supports GET, POST and PATCH on their designated endpoints", 405);
   if (pathname === "/api/state") { assertMethod(request, "GET"); sendJson(response, 200, service.snapshot()); return; }
+  if (pathname === "/api/assistant/state") { assertMethod(request, "GET"); sendJson(response, 200, service.snapshot()); return; }
+  if (pathname === "/api/assistant/sessions") { assertMethod(request, "POST"); sendJson(response, 200, await service.createAssistantSession(assistantCreateSessionSchema.parse(await bodyJson(request)))); return; }
+  const sessionUpgradeMatch: RegExpExecArray | null = /^\/api\/assistant\/sessions\/([a-zA-Z0-9._:-]+)\/upgrade$/.exec(pathname);
+  if (sessionUpgradeMatch?.[1] !== undefined) { assertMethod(request, "POST"); sendJson(response, 200, await service.upgradeAssistantSession(sessionUpgradeMatch[1], assistantUpgradeSchema.parse(await bodyJson(request)))); return; }
+  const taskStartMatch: RegExpExecArray | null = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/start$/.exec(pathname);
+  if (taskStartMatch?.[1] !== undefined) { assertMethod(request, "POST"); sendJson(response, 200, await service.startAssistantTask(taskStartMatch[1], assistantStartTaskSchema.parse(await bodyJson(request)))); return; }
+  const taskAnswerMatch: RegExpExecArray | null = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/answer$/.exec(pathname);
+  if (taskAnswerMatch?.[1] !== undefined) { assertMethod(request, "POST"); sendJson(response, 200, await service.answerAssistantTask(taskAnswerMatch[1], assistantAnswerSchema.parse(await bodyJson(request)))); return; }
+  const taskPlanMatch: RegExpExecArray | null = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/plan$/.exec(pathname);
+  if (taskPlanMatch?.[1] !== undefined) { assertMethod(request, "PATCH"); sendJson(response, 200, await service.updateAssistantPlan(taskPlanMatch[1], assistantPlanSchema.parse(await bodyJson(request)))); return; }
+  const taskConfirmMatch: RegExpExecArray | null = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/confirm$/.exec(pathname);
+  if (taskConfirmMatch?.[1] !== undefined) { assertMethod(request, "POST"); sendJson(response, 200, await service.confirmAssistantTask(taskConfirmMatch[1], assistantConfirmSchema.parse(await bodyJson(request)))); return; }
+  const taskActionMatch: RegExpExecArray | null = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/action$/.exec(pathname);
+  if (taskActionMatch?.[1] !== undefined) { assertMethod(request, "POST"); sendJson(response, 200, await service.actOnAssistantTask(taskActionMatch[1], assistantTaskActionSchema.parse(await bodyJson(request)))); return; }
+  const taskRequirementMatch: RegExpExecArray | null = /^\/api\/assistant\/tasks\/([a-zA-Z0-9._:-]+)\/requirements$/.exec(pathname);
+  if (taskRequirementMatch?.[1] !== undefined) { assertMethod(request, "POST"); sendJson(response, 200, await service.addAssistantRequirement(taskRequirementMatch[1], assistantRequirementSchema.parse(await bodyJson(request)))); return; }
+  const evidenceMatch: RegExpExecArray | null = /^\/api\/assistant\/evidence\/([a-zA-Z0-9._:-]+)$/.exec(pathname);
+  if (evidenceMatch?.[1] !== undefined) { assertMethod(request, "PATCH"); sendJson(response, 200, await service.updateAssistantEvidence(evidenceMatch[1], assistantEvidenceSchema.parse(await bodyJson(request)))); return; }
   if (pathname === "/api/matters") { assertMethod(request, "POST"); sendJson(response, 200, await service.addMatter(addMatterSchema.parse(await bodyJson(request)))); return; }
   if (pathname === "/api/records") { assertMethod(request, "POST"); sendJson(response, 200, await service.addRecord(addRecordSchema.parse(await bodyJson(request)))); return; }
   const recordMatch: RegExpExecArray | null = /^\/api\/records\/([a-zA-Z0-9._:-]+)$/.exec(pathname);
@@ -142,10 +167,21 @@ function handleError(error: object, response: ServerResponse): void {
 export async function createH5Server(options: H5ServiceOptions): Promise<Server> {
   const service: H5Service = await createH5Service(options);
   let pending: Promise<void> = Promise.resolve();
+  const enqueue = <T>(operation: () => Promise<T>): Promise<T> => {
+    const task: Promise<T> = pending.then(operation);
+    pending = task.then(() => undefined, () => undefined);
+    return task;
+  };
   const server: Server = createServer((request, response): void => {
-    const task: Promise<void> = pending.then(async (): Promise<void> => { await route(request, response, service, options); });
-    pending = task.catch((error: Error): void => { handleError(error, response); });
+    void enqueue(async (): Promise<void> => { await route(request, response, service, options); }).catch((error: unknown): void => { handleError(error instanceof Error ? error : new Error("Unknown local request failure"), response); });
   });
+  const taskTimer: NodeJS.Timeout = setInterval((): void => {
+    void enqueue(async (): Promise<void> => { await service.tickAssistantTasks(); }).catch((error: unknown): void => {
+      const code: string = error instanceof DomainError ? error.code : "ASSISTANT_TICK_FAILED";
+      process.stderr.write(`${JSON.stringify({ event: "assistant_task_tick_failed", code })}\n`);
+    });
+  }, 400);
+  server.once("close", (): void => { clearInterval(taskTimer); });
   server.requestTimeout = 15000;
   server.headersTimeout = 10000;
   server.keepAliveTimeout = 5000;

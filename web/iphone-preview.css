@@ -1,0 +1,87 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #e8eaed;
+  color: #111;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.preview-stage {
+  display: grid;
+  width: 100%;
+  min-height: 100vh;
+  min-height: 100dvh;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 50% 48%, rgb(255 255 255 / 76%), transparent 57%),
+    #e8eaed;
+}
+
+.iphone-frame {
+  position: relative;
+  width: min(511px, 90vw, 48.6dvh);
+  aspect-ratio: 1022 / 1936;
+  filter: drop-shadow(0 24px 38px rgb(27 34 42 / 22%));
+}
+
+.iphone-screen {
+  position: absolute;
+  z-index: 0;
+  top: 5.992%;
+  left: 11.546%;
+  width: 76.908%;
+  height: 87.996%;
+  border: 0;
+  border-radius: 11.7% / 5.9%;
+  background: #f7f5f0;
+}
+
+.status-time {
+  position: absolute;
+  z-index: 1;
+  top: 8.2%;
+  left: 18.6%;
+  font-size: clamp(9px, 2.9vw, 15px);
+  font-weight: 650;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.status-icons {
+  position: absolute;
+  z-index: 1;
+  top: 7.0%;
+  right: 18.2%;
+  width: 15.45%;
+  height: auto;
+  pointer-events: none;
+}
+
+.iphone-bezel {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+@media (max-height: 520px) {
+  .iphone-frame {
+    width: min(511px, 90vw, 88dvh);
+  }
+}

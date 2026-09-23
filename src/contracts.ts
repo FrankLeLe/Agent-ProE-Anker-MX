@@ -46,6 +46,16 @@ export const memorySchema = z.object({
 });
 export type Memory = z.infer<typeof memorySchema>;
 
+export const contextEvidenceScopeSchema = z.object({
+  mode: z.enum(["all_active_context_records", "selected_record_ids"]),
+  recordIds: z.array(identifierSchema).max(200),
+}).superRefine((value, context) => {
+  if (value.mode === "all_active_context_records" && value.recordIds.length > 0) {
+    context.addIssue({ code: "custom", message: "The full-context scope cannot list individual record IDs" });
+  }
+}).default({ mode: "all_active_context_records", recordIds: [] });
+export type ContextEvidenceScope = z.infer<typeof contextEvidenceScopeSchema>;
+
 export const contextBundleSchema = z.object({
   contract: z.literal("context-bundle.v1"),
   id: identifierSchema,
@@ -56,6 +66,7 @@ export const contextBundleSchema = z.object({
   userRequirements: z.array(z.string().min(1).max(10000)),
   memories: z.array(memorySchema),
   gaps: z.array(z.string().min(1).max(10000)),
+  evidenceScope: contextEvidenceScopeSchema,
 });
 export type ContextBundle = z.infer<typeof contextBundleSchema>;
 

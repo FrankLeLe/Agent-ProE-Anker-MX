@@ -1,6 +1,7 @@
 /** Validated single-owner state and deterministic source conversion shared by both runtimes. */
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { assistantStateSchema, emptyAssistantState } from "./assistant-types.ts";
 import { artifactSchema, contextBundleSchema, exportPlanSchema, identifierSchema, memorySchema, sourceSchema, toolRunSchema } from "./contracts.ts";
 import type { Memory, Source } from "./contracts.ts";
 import type { H5Record } from "./h5-types.ts";
@@ -23,12 +24,15 @@ const decisionSchema = z.object({
 const requestSchema = z.object({
   requestId: identifierSchema, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), kind: z.string(),
   artifactId: identifierSchema.nullable(), operationId: identifierSchema.nullable(),
+  sessionId: identifierSchema.nullable().default(null), taskId: identifierSchema.nullable().default(null),
 });
 export const stateSchema = z.object({
   schemaVersion: z.literal(1), revision: z.number().int().positive(), records: z.array(recordSchema),
   recordHistory: z.array(recordSchema), matters: z.array(matterSchema), decisions: z.array(decisionSchema),
   artifacts: z.array(artifactSchema), contexts: z.array(contextBundleSchema), plans: z.array(exportPlanSchema),
   runs: z.array(toolRunSchema), requests: z.array(requestSchema),
+  // Existing local snapshots are upgraded on their next append-only write.
+  assistant: assistantStateSchema.default(emptyAssistantState()),
 });
 export type LocalState = z.infer<typeof stateSchema>;
 export type SavedRequest = z.infer<typeof requestSchema>;
@@ -37,13 +41,13 @@ export function fingerprint(value: object): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-export function evidenceFromRecords(records: readonly H5Record[], history: readonly H5Record[]): { sources: Source[]; memories: Memory[] } {
+export function evidenceFromRecords(records: readonly H5Record[], history: readonly H5Record[], ownerId: string = LOCAL_OWNER): { sources: Source[]; memories: Memory[] } {
   const sources: Source[] = records.map((record): Source => sourceSchema.parse({
-    id: record.id, ownerId: LOCAL_OWNER, contextId: record.contextId, revision: record.revision, state: record.state,
+    id: record.id, ownerId, contextId: record.contextId, revision: record.revision, state: record.state,
     recordedAt: record.recordedAt, timezone: "Asia/Shanghai", durationMs: (record.durationSeconds ?? 0) * 1000, provenance: record.provenance,
   }));
   const memories: Memory[] = [...history, ...records].map((record): Memory => memorySchema.parse({
-    id: `memory-${record.id}-v${record.revision}`, ownerId: LOCAL_OWNER, contextId: record.contextId,
+    id: `memory-${record.id}-v${record.revision}`, ownerId, contextId: record.contextId,
     text: `${record.provenance === "synthetic" ? "【构造示例】" : ""}${record.text}`, kind: "fact", provenance: record.provenance === "synthetic" ? "synthetic" : "user_entered",
     module: record.module, validFrom: record.recordedAt, validUntil: null,
     supersedesId: record.revision > 1 ? `memory-${record.id}-v${record.revision - 1}` : null,
@@ -72,7 +76,7 @@ export function initialState(now: string): LocalState {
     matters: [
       { id: "mx-product", title: "团队方案同步", goal: "准备团队同步要用的进展、变化与待决定事项", dueAt: new Date(`${tomorrow}T14:00:00+08:00`).toISOString(), participants: ["Alex"], durationMinutes: 30, provenance: "synthetic" },
       { id: "week-end", title: "周末生活安排", goal: "整理周末安排与待确认事项", dueAt: new Date(`${tomorrow}T09:00:00+08:00`).toISOString(), participants: [], durationMinutes: 30, provenance: "synthetic" },
-    ], decisions: [], artifacts: [], contexts: [], plans: [], runs: [], requests: [],
+    ], decisions: [], artifacts: [], contexts: [], plans: [], runs: [], requests: [], assistant: emptyAssistantState(),
   });
 }
 

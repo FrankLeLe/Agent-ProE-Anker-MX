@@ -1,5 +1,6 @@
 /** Shared local H5 boundaries; synthetic records are always distinguishable from user input. */
 import type { ContextBundle, ExportPlan, PreparedArtifact, SkillId } from "./contracts.ts";
+import type { AssistantConfirmation, AssistantMode, AssistantSnapshot, AssistantTaskStatus } from "./assistant-types.ts";
 
 export type RecordModule = "work" | "life" | "social" | "inspiration";
 export type RecordCover = "commute" | "desk" | "run" | "none";
@@ -56,6 +57,32 @@ export interface H5Snapshot {
   artifacts: PreparedArtifact[];
   contexts: ContextBundle[];
   exports: H5ExportReceipt[];
+  assistant: AssistantSnapshot;
+}
+
+export interface AssistantCreateSessionInput {
+  requestId: string;
+  mode: AssistantMode;
+  content: string;
+  contextId: string | null;
+}
+export interface AssistantUpgradeInput { requestId: string; contextId: string | null; }
+export interface AssistantStartTaskInput { requestId: string; }
+export interface AssistantAnswerInput { requestId: string; inputRequestId: string; optionId: string; }
+export interface AssistantPlanInput { requestId: string; deliveryMode: "docx" | "content"; }
+export interface AssistantConfirmInput { requestId: string; confirmationId: string; decision: "approved" | "rejected"; }
+export interface AssistantTaskActionInput { requestId: string; action: "pause" | "resume" | "cancel" | "retry"; }
+export interface AssistantEvidenceInput { requestId: string; included: boolean; }
+export interface AssistantRequirementInput { requestId: string; content: string; }
+export interface AssistantOperationResponse {
+  snapshot: H5Snapshot;
+  sessionId: string | null;
+  taskId: string | null;
+  confirmation: AssistantConfirmation | null;
+}
+export interface AssistantTaskListResponse {
+  snapshot: H5Snapshot;
+  status: AssistantTaskStatus | null;
 }
 export interface AddRecordInput {
   requestId: string;
@@ -81,6 +108,7 @@ export interface ReviseRecordInput {
 export interface SuggestionDecisionInput {
   requestId: string;
   decision: "snooze" | "dismiss" | "restore";
+  snoozeMinutes?: 60 | 180 | 1440 | undefined;
 }
 export interface PrepareInput {
   requestId: string;

@@ -1,5 +1,15 @@
 node_modules/
+dist/
 work/npm-cache/
+work/h5-data/
+work/sites-deployment/
+work/edge-qa-captures/
+work/edge-qa-data/
+work/edge-qa-a00-data/
+work/edge-qa-runtime/
+work/h5-edge-qa.*/
+work/h5-build/
+work/assistant-v4-*-test/
 work/skills-mcp-implementation/generated/
 .env
 .env.*

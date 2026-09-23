@@ -39,6 +39,9 @@ fi
 if [[ -n "$qa_action" ]]; then
   qa_args+=(--click-action "$qa_action")
 fi
+if [[ "${EDGE_QA_CAPTURE_EACH_ACTION:-false}" == "true" ]]; then
+  qa_args+=(--capture-each-action true --capture-names "${EDGE_QA_CAPTURE_NAMES:-}")
+fi
 "$windows_node" "$(wslpath -w "$project_root/scripts/edge-qa.cjs")" "${qa_args[@]}"
 if [[ "$qa_device" == "iphone" ]]; then
   qa_status_time="$(TZ=Asia/Shanghai date +'%l:%M' | sed 's/^ //')"

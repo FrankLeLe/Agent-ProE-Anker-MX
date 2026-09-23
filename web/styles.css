@@ -15,7 +15,10 @@
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto!important}*,*::before,*::after{animation:none!important;transition:none!important}}
 
 /* One app canvas and one interaction layout at every browser width. */
-html{background:#eeebe4;scrollbar-gutter:stable}
+html{background:#eeebe4;scrollbar-gutter:auto}
+/* Keep touch, wheel, and keyboard scrolling while hiding scrollbar chrome. */
+*{scrollbar-width:none;-ms-overflow-style:none}
+*::-webkit-scrollbar{display:none;width:0;height:0}
 body{background:#eeebe4;min-height:100dvh}
 #app{width:100%;max-width:430px;min-height:100dvh;margin:0 auto;background:var(--canvas);display:block;border:0;box-shadow:0 0 0 1px #e5e0d7}
 .main-content{width:100%;max-width:none;padding:24px 20px calc(90px + env(safe-area-inset-bottom))}

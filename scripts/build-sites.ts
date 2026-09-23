@@ -20,6 +20,7 @@ await build({ entryPoints: ["web/app.ts"], outfile: "dist/client/app.js", bundle
 await cp(path.join(root, "web/assets"), path.join(dist, "client/assets"), { recursive: true });
 await cp(path.join(root, "web/index.html"), path.join(dist, "client/index.html"));
 await cp(path.join(root, "web/styles.css"), path.join(dist, "client/styles.css"));
+await cp(path.join(root, "web/modules.css"), path.join(dist, "client/modules.css"));
 await writeFile(path.join(dist, ".openai/hosting.json"), JSON.stringify(manifest, null, 2), "utf8");
 await cp(path.join(root, "drizzle"), path.join(dist, ".openai/drizzle"), { recursive: true });
 await mkdir(path.join(root, "work/sites-deployment"), { recursive: true });

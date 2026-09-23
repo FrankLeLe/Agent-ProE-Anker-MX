@@ -8,6 +8,8 @@ import type { ContextBundle, PreparedArtifact, SkillId } from "../src/contracts.
 import type { ExportPlanResponse, H5ExportReceipt, H5Matter, H5Record, H5Snapshot, H5Suggestion, RecordModule } from "../src/h5-types.ts";
 import { assistantView as assistantV4View, initialAssistantUiState } from "./assistant.js";
 import type { AssistantUiState } from "./assistant.js";
+import { memoryModuleView, todayModuleView } from "./modules.js";
+import type { MemoryModulePage, ModuleOptions, TodayModulePage } from "./modules.js";
 import { ApiError, array, assistantOperation, exportPlan, exportResult, object, preparation, request, snapshot, string } from "./api.js";
 import type { JsonValue } from "./api.js";
 
@@ -43,9 +45,26 @@ interface ViewState {
   busy: string | null;
   error: string;
   notice: string;
+  todayPage: TodayModulePage;
+  memoryPage: MemoryModulePage;
+  moduleRecordId: string;
+  moduleQuery: string;
+  moduleFilter: string;
+  memoryFilter: string;
+  pendingFilter: ModuleOptions["pendingFilter"];
+  selectedPending: string[];
+  resolvedPending: string[];
+  playingRecord: string;
+  selectedDay: string;
+  selectedMemoryMatter: string;
+  selectedPerson: string;
+  recordSelectionMode: boolean;
+  selectedRecordIds: string[];
+  ignoredIdeas: string[];
+  memoryItemStates: Record<string, string>;
 }
 
-const state: ViewState = { snapshot: null, tab: "today", assistantStage: "overview", assistantUi: initialAssistantUiState(), timelineExpanded: false, backgroundExpanded: false, filter: "all", search: "", group: "matter", matterId: "", skillId: "report-outline", requirements: "", requirementsByMatter: {}, artifactId: "", artifactVersion: null, drafts: [], recordDraft: { title: "", text: "", module: "work", contextId: "" }, matterDraft: { title: "", goal: "", dueAt: "", duration: "30", participants: "" }, modal: null, busy: null, error: "", notice: "" };
+const state: ViewState = { snapshot: null, tab: "today", assistantStage: "overview", assistantUi: initialAssistantUiState(), timelineExpanded: false, backgroundExpanded: false, filter: "all", search: "", group: "matter", matterId: "", skillId: "report-outline", requirements: "", requirementsByMatter: {}, artifactId: "", artifactVersion: null, drafts: [], recordDraft: { title: "", text: "", module: "work", contextId: "" }, matterDraft: { title: "", goal: "", dueAt: "", duration: "30", participants: "" }, modal: null, busy: null, error: "", notice: "", todayPage: "home", memoryPage: "home", moduleRecordId: "", moduleQuery: "", moduleFilter: "all", memoryFilter: "全部", pendingFilter: "all", selectedPending: [], resolvedPending: [], playingRecord: "", selectedDay: "", selectedMemoryMatter: "", selectedPerson: "", recordSelectionMode: false, selectedRecordIds: [], ignoredIdeas: [], memoryItemStates: {} };
 const tabScroll: Record<Tab, number> = { today: 0, memory: 0, assistant: 0, profile: 0 };
 const assistantHistory: AssistantLocation[] = [];
 const requestIds: Map<string, string> = new Map();
@@ -67,7 +86,6 @@ function dateText(value: string, mode: "day" | "time" | "full"): string {
   const options: Intl.DateTimeFormatOptions = mode === "time" ? { hour: "2-digit", minute: "2-digit", hour12: false } : mode === "day" ? { month: "long", day: "numeric", weekday: "long" } : { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false };
   return new Intl.DateTimeFormat("zh-CN", options).format(new Date(value));
 }
-function isSameDay(left: string, right: string): boolean { return new Date(left).toDateString() === new Date(right).toDateString(); }
 function activeRecords(): H5Record[] { return state.snapshot?.records.filter((record) => record.state === "active") ?? []; }
 function currentMatter(): H5Matter | undefined { return state.snapshot?.matters.find((matter) => matter.id === state.matterId) ?? state.snapshot?.matters[0]; }
 function matterRecords(matterId: string): H5Record[] { return activeRecords().filter((record) => record.contextId === matterId); }
@@ -191,35 +209,8 @@ function timelineRecord(record: H5Record): string {
   const cover: string = record.cover === "run" ? "mountains" : record.cover;
   return `<article class="timeline-item"><div class="timeline-time"><span class="time-dot"></span><time datetime="${escape(record.recordedAt)}">${dateText(record.recordedAt, "time")}</time></div><button class="record-content" type="button" data-action="source" data-id="${escape(record.id)}" data-testid="record-${escape(record.id)}"><div class="record-media ${cover === "none" ? "text-cover" : ""}">${cover === "none" ? icon("file-text", "") : `<img src="/assets/${cover}.png" alt="" loading="lazy"><span>场景示意</span>`}</div><div class="record-copy"><span class="category ${record.module}">${moduleLabel(record.module)}</span><h3>${escape(record.title)}</h3><p>${escape(record.text)}</p><span class="record-origin">${icon("file-text", "tiny")}${record.provenance === "synthetic" ? "示例记录" : "你的文字记录"}${icon("chevron-right", "tiny")}</span></div></button></article>`;
 }
-function todayView(): string {
-  const snapshotValue: H5Snapshot | null = state.snapshot;
-  if (snapshotValue === null) return "";
-  const todayRecords: H5Record[] = activeRecords().filter((record) => isSameDay(record.recordedAt, snapshotValue.now));
-  const records: H5Record[] = todayRecords.filter((record) => state.filter === "all" || record.module === state.filter).sort((a, b) => Date.parse(a.recordedAt) - Date.parse(b.recordedAt));
-  const visibleRecords: H5Record[] = state.timelineExpanded ? records : records.slice(0, 3);
-  const suggestion: H5Suggestion | undefined = snapshotValue.suggestions.find((candidate) => candidate.state === "available" || candidate.state === "prepared");
-  const paused: H5Suggestion[] = snapshotValue.suggestions.filter((candidate) => candidate.state === "snoozed" || candidate.state === "dismissed");
-  const userRecordCount: number = todayRecords.filter((record) => record.provenance === "user_text").length;
-  const moduleCount: number = new Set(todayRecords.map((record) => record.module)).size;
-  return `${pageHeader("今天", dateText(snapshotValue.now, "day"))}<div class="page-note">${icon("book-open", "small")}<span>示例记录 · 可添加你的内容</span></div><div class="today-layout"><section class="day-section"><div class="section-heading"><h2>${state.filter === "all" ? "今天的生活线" : `今天的${moduleLabel(state.filter)}片段`}</h2><span>${records.length} 个片段</span></div><div class="timeline" id="today-timeline">${visibleRecords.length > 0 ? visibleRecords.map(timelineRecord).join("") : `<div class="empty-state compact">${icon("book-open", "")}<h3>这里还没有片段</h3><p>写下一个想法，或试试其他分类。</p>${button("添加文字记录", "add", "secondary-button", "")}</div>`}</div>${records.length > 3 ? button(state.timelineExpanded ? "收起记录" : `查看全部 ${records.length} 条记录`, "timeline-toggle", "text-button timeline-toggle", `data-testid="timeline-toggle" aria-expanded="${state.timelineExpanded}" aria-controls="today-timeline"`) : ""}</section><section class="daily-reflection"><h2>${todayRecords.length === 0 ? "今天，还可以留下一个片段。" : `今天，留下了 ${todayRecords.length} 个片段。`}</h2><p>${todayRecords.length === 0 ? "一个想法、一段讨论，都可以从文字开始。" : `覆盖 ${moduleCount} 类日常 · ${userRecordCount} 条由你添加`}</p></section><div class="category-filters app-categories" aria-label="记录分类">${modules.map((module) => button(`${icon(module.icon, "")}<strong>${module.label}</strong><small>${todayRecords.filter((record) => record.module === module.id).length} 条记录</small>`, "filter", `filter-chip ${module.id} ${state.filter === module.id ? "selected" : ""}`, `data-filter="${module.id}" data-testid="filter-${module.id}" aria-pressed="${state.filter === module.id}" aria-label="${module.label}分类，再次点击显示全部"`)).join("")}</div><aside class="preparation-column">${suggestion === undefined ? `<section class="preparation-card compact-preparation quiet-card"><h2>给下一步，留一点准备。</h2>${button(`打开助手${icon("arrow-right", "small")}`, "tab", "secondary-button", 'data-tab="assistant"')}</section>` : compactSuggestionCard(suggestion)}${paused.map((item) => `<div class="paused-suggestion"><span>${item.state === "snoozed" ? `${icon("clock", "small")} 已稍后${item.snoozedUntil === null ? "" : ` · ${dateText(item.snoozedUntil, "full")}`}` : "已忽略本次提醒"}</span>${button("恢复", "restore", "text-button", `data-id="${escape(item.id)}" data-testid="suggestion-restore"`)}</div>`).join("")}</aside></div>`;
-}
-function memoryResults(): string {
-  const query: string = state.search.toLocaleLowerCase().trim();
-  const records: H5Record[] = activeRecords().filter((record) => {
-    const matter: H5Matter | undefined = state.snapshot?.matters.find((candidate) => candidate.id === record.contextId);
-    return `${record.title} ${record.text} ${matter?.title ?? ""} ${matter?.participants.join(" ") ?? ""}`.toLocaleLowerCase().includes(query);
-  });
-  const groups: Map<string, H5Record[]> = new Map();
-  for (const record of records) {
-    const matter: H5Matter | undefined = state.snapshot?.matters.find((candidate) => candidate.id === record.contextId);
-    const keys: string[] = state.group === "date" ? [dateText(record.recordedAt, "day")] : state.group === "person" ? (matter?.participants.length ? matter.participants.map((person) => `${person} · 事项关联`) : ["尚未关联人物"]) : [matter?.title ?? "生活片段"];
-    for (const key of keys) groups.set(key, [...(groups.get(key) ?? []), record]);
-  }
-  return groups.size === 0 ? `<div class="empty-state">${icon("search", "")}<h3>没有找到相关记录</h3><p>试试更短的关键词，或添加一条新记录。</p></div>` : [...groups.entries()].map(([label, group]) => `<section class="memory-group"><div class="section-heading"><h2>${escape(label)}</h2><span>${group.length} 条记录</span></div>${group.map((record) => `<article class="memory-card"><span class="tinted-icon ${record.module}">${icon(modules.find((module) => module.id === record.module)?.icon ?? "file-text", "")}</span><div><h3>${escape(record.title)}</h3><p>${escape(record.text)}</p><div class="memory-meta"><span>${dateText(record.recordedAt, "full")} · ${record.provenance === "synthetic" ? "示例记录" : "你的文字记录"}</span>${sourceButton(record, "查看来源")}</div></div></article>`).join("")}</section>`).join("");
-}
-function memoryView(): string {
-  return `${pageHeader("记忆", "从片段，找到联系")}<div class="memory-toolbar"><label class="search-field">${icon("search", "")}<input type="search" data-field="search" data-testid="memory-search" aria-label="搜索人物、事情或记录内容" placeholder="搜索人物、事情或过去的内容" value="${escape(state.search)}"></label><div class="segmented" aria-label="记忆分组">${([{ id: "matter", text: "事情" }, { id: "person", text: "人物" }, { id: "date", text: "日期" }] satisfies { id: MemoryGroup; text: string }[]).map((group) => button(group.text, "memory-group", state.group === group.id ? "active" : "", `data-group="${group.id}" data-testid="group-${group.id}" aria-pressed="${state.group === group.id}"`)).join("")}</div></div><section class="weekly-landscape"><img src="/assets/mountains.png" alt="太阳与层叠山峦的回顾插画"><div><span>回看这些日子</span><h2>生活的线索，<br>藏在每一个片段里。</h2><p>${activeRecords().length} 条记录 · ${state.snapshot?.matters.length ?? 0} 件关联事项</p></div><span class="image-note">场景插画</span></section>${state.group === "person" ? `<p class="quiet-note">人物来自事项的参与人设置；这里只显示该事项关联的记录，不代表识别了每条记录的说话人。</p>` : ""}<div id="memory-results">${memoryResults()}</div>`;
-}
+void compactSuggestionCard;
+void timelineRecord;
 function backgroundNodes(matter: H5Matter): string {
   const records: H5Record[] = matterRecords(matter.id);
   return `<div class="background-nodes"><article class="background-node"><span class="tinted-icon blue">${icon("calendar", "")}</span><div><h3>${escape(matter.title)}</h3><p>${dateText(matter.dueAt, "full")} · ${matter.durationMinutes} 分钟</p><span class="subtle-tag">${matter.provenance === "synthetic" ? "示例事项设定" : "你设置的事项"}</span></div></article><article class="background-node"><span class="tinted-icon green">${icon("users", "")}</span><div><h3>${matter.participants.length === 0 ? "参与人待补充" : escape(matter.participants.join("、"))}</h3><p>事项的参与人设置，仍需你自行核对</p></div></article><article class="background-node"><span class="tinted-icon orange">${icon("sparkles", "")}</span><div><h3>从已有记录开始准备</h3><p>${escape(matter.goal)}</p><span class="subtle-tag">准备建议</span></div></article></div><details class="background-sources" data-testid="background-sources" ${state.backgroundExpanded ? "open" : ""}><summary>${records.length} 条可核对的背景记录 ${icon("chevron-right", "small")}</summary>${records.map((record) => `<div class="background-source"><span>${escape(record.title)}<small>${record.provenance === "synthetic" ? "示例记录" : "你的文字记录"} · 修订 ${record.revision}</small></span>${sourceButton(record, "来源")}</div>`).join("")}</details>`;
@@ -276,8 +267,11 @@ function renderMessages(): void {
   if (modalError !== null) modalError.textContent = state.error;
 }
 function render(): void {
-  const view: string = state.snapshot === null ? `<section class="initial-state"><h1>记录暂时没有读进来</h1><p>请检查服务状态，再重新读取。</p>${button("重新读取", "refresh", "primary-button", 'data-testid="retry-load"')}</section>` : state.tab === "today" ? todayView() : state.tab === "memory" ? memoryView() : state.tab === "assistant" ? assistantView() : profileView();
-  element("app").innerHTML = `${navigation()}<main id="main-content" class="main-content" tabindex="-1"><div id="message-host"></div>${view}<footer class="app-footer"><span>Mixture X</span><span>记录留在这里，下一步由你决定。</span></footer></main>`;
+  const moduleOptions: ModuleOptions = { todayPage: state.todayPage, memoryPage: state.memoryPage, recordId: state.moduleRecordId, query: state.moduleQuery, filter: state.tab === "today" ? state.moduleFilter : state.memoryFilter, group: state.group === "matter" ? "things" : state.group === "date" ? "date" : "person", pendingFilter: state.pendingFilter, selectedPending: state.selectedPending, confirmedPending: state.resolvedPending, playingRecord: state.playingRecord, selectedDay: state.selectedDay, selectedMatter: state.selectedMemoryMatter, selectedPerson: state.selectedPerson, recordSelectionMode: state.recordSelectionMode, selectedRecordIds: state.selectedRecordIds, ignoredIdeas: state.ignoredIdeas, memoryItemStates: state.memoryItemStates };
+  const subpage: boolean = (state.tab === "today" && state.todayPage !== "home") || (state.tab === "memory" && state.memoryPage !== "home");
+  const view: string = state.snapshot === null ? `<section class="initial-state"><h1>记录暂时没有读进来</h1><p>请检查服务状态，再重新读取。</p>${button("重新读取", "refresh", "primary-button", 'data-testid="retry-load"')}</section>` : state.tab === "today" ? todayModuleView(state.snapshot, moduleOptions) : state.tab === "memory" ? memoryModuleView(state.snapshot, moduleOptions) : state.tab === "assistant" ? assistantView() : profileView();
+  element("app").classList.toggle("module-subpage", subpage);
+  element("app").innerHTML = `${subpage ? "" : navigation()}<main id="main-content" class="main-content" tabindex="-1"><div id="message-host"></div>${view}<footer class="app-footer"><span>Mixture X</span><span>记录留在这里，下一步由你决定。</span></footer></main>`;
   document.title = `Mixture X · ${tabs.find((tab) => tab.id === state.tab)?.label ?? "今天"}`;
   renderMessages();
   updateBusy();
@@ -369,6 +363,8 @@ function switchTab(tab: Tab): void {
   if (state.tab === tab) return;
   tabScroll[state.tab] = window.scrollY;
   state.tab = tab;
+  if (tab === "today") state.todayPage = "home";
+  if (tab === "memory") state.memoryPage = "home";
   state.error = "";
   state.notice = "";
   render();
@@ -728,6 +724,60 @@ async function action(target: HTMLElement): Promise<void> {
   const name: string = target.dataset.action ?? "";
   const id: string = target.dataset.id ?? "";
   if (name === "tab") { const tab: string = target.dataset.tab ?? ""; if (tab === "today" || tab === "memory" || tab === "assistant" || tab === "profile") switchTab(tab); return; }
+  if (name === "module-back") { if (state.tab === "today") state.todayPage = "home"; else if (state.tab === "memory") state.memoryPage = "home"; state.error = ""; state.notice = ""; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "today-recordings" || name === "today-summary" || name === "today-work" || name === "today-life" || name === "today-social" || name === "today-inspiration" || name === "today-module") {
+    const module = target.dataset.module ?? "";
+    state.tab = "today";
+    state.todayPage = name === "today-recordings" ? "recordings" : name === "today-summary" ? "summary" : name === "today-work" ? "work" : name === "today-life" ? "life" : name === "today-social" ? "social" : name === "today-inspiration" ? "inspiration" : isModule(module) ? module : "home";
+    state.error = ""; state.notice = ""; render(); window.scrollTo({ top: 0, behavior: "instant" }); return;
+  }
+  if (name === "memory-day") { state.tab = "memory"; state.memoryPage = "day"; state.selectedDay = target.dataset.day ?? state.snapshot?.now.slice(0, 10) ?? ""; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "memory-matter") { state.tab = "memory"; state.memoryPage = "matter"; state.selectedMemoryMatter = id; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "memory-person") { state.tab = "memory"; state.memoryPage = "person"; state.selectedPerson = target.dataset.person ?? ""; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "memory-record") { state.tab = "memory"; state.memoryPage = "detail"; state.moduleRecordId = id; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "module-record") { state.tab = "today"; state.todayPage = "recording"; state.moduleRecordId = id; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "memory-pending") { state.tab = "memory"; state.memoryPage = "pending"; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "memory-review") { state.tab = "memory"; state.memoryPage = "review"; state.memoryFilter = target.dataset.period === "month" ? "month" : "week"; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "memory-search-go") { state.tab = "memory"; state.memoryPage = "search"; state.memoryFilter = "全部"; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "memory-group") { const group = target.dataset.group; if (group === "date") state.group = "date"; else if (group === "things") state.group = "matter"; else if (group === "person") state.group = "person"; render(); return; }
+  if (name === "memory-filter") { state.memoryFilter = target.dataset.filter ?? "全部"; render(); return; }
+  if (name === "memory-pending-filter") { const filter = target.dataset.filter; if (filter === "all" || filter === "identity" || filter === "assignment" || filter === "conflict") state.pendingFilter = filter; render(); return; }
+  if (name === "module-filter") { state.moduleFilter = target.dataset.filter ?? "all"; render(); return; }
+  if (name === "module-play") { state.playingRecord = state.playingRecord === id ? "" : id; render(); return; }
+  if (name === "record-selection-mode") { state.recordSelectionMode = !state.recordSelectionMode; if (!state.recordSelectionMode) state.selectedRecordIds = []; render(); return; }
+  if (name === "module-bulk-action") {
+    const operation = target.dataset.operation ?? "";
+    if (operation === "delete" && !window.confirm("这里只演示批量删除确认；不会删除记录或其来源。继续显示演示提示？")) return;
+    state.notice = operation === "classify" ? "转分类界面尚未连接保存接口；没有更改记录。" : operation === "exclude" ? "排除操作尚未连接保存接口；原始记录保持不变。" : "批量删除功能尚未连接保存接口；原始记录保持不变。";
+    renderMessages(); return;
+  }
+  if (name === "today-ignore-idea") { if (!state.ignoredIdeas.includes(id)) state.ignoredIdeas.push(id); state.notice = "已从当前灵感视图隐藏整理建议；原始记录仍保留。"; render(); return; }
+  if (name === "today-save-memory") { if (window.confirm("确认将此内容保存为长期记忆？当前版本仅演示确认提示，不会写入服务端。")) { state.notice = "确认流程已演示；保存服务尚未接入，记录没有改变。"; renderMessages(); } return; }
+  if (name === "today-confirm-identity") { if (window.confirm("只有核对过录音和参与人后才确认身份。此原型不会写入人物绑定。")) { state.notice = "已完成确认流程演示；人物身份仍未写入或自动合并。"; renderMessages(); } return; }
+  if (name === "today-merge-ideas") { if (window.confirm("合并只应在你核对两条原始想法后进行。原型不会覆盖或删除任何原文。继续演示？")) { state.notice = "相似想法确认流程已演示；原始记录仍保持不变。"; renderMessages(); } return; }
+  if (name === "today-add-idea") { state.recordDraft.module = "inspiration"; state.recordDraft.contextId = currentMatter()?.id ?? ""; openModal({ kind: "add" }); return; }
+  if (name === "module-assistant") { if (state.selectedMemoryMatter) switchMatter(state.selectedMemoryMatter); else if (state.selectedPerson) { const matter = state.snapshot?.matters.find((item) => item.participants.includes(state.selectedPerson)); if (matter) switchMatter(matter.id); } state.tab = "assistant"; state.assistantUi.screen = "home"; render(); window.scrollTo({ top: 0, behavior: "instant" }); return; }
+  if (name === "memory-item-state") {
+    const next = target.dataset.state ?? "";
+    if (next !== "confirm" && next !== "invalidate" && next !== "delete") return;
+    const verb = next === "confirm" ? "标记为已确认" : next === "invalidate" ? "标记为失效" : "从记忆索引中移除";
+    if (!window.confirm(`${verb}仅在此原型中演示，不会删除或改写来源。继续？`)) return;
+    state.memoryItemStates[id] = next === "confirm" ? "已确认（原型状态）" : next === "invalidate" ? "已标记失效（原型状态）" : "已从原型索引隐藏（来源保留）";
+    state.notice = "操作只更新当前原型界面；服务端记忆管理接口尚未接入。"; render(); return;
+  }
+  if (name === "module-notice") { state.notice = target.dataset.notice ?? "该操作目前仅展示原型界面，尚未接入服务端。"; renderMessages(); return; }
+  if (name === "source-edit-open") { const record = activeRecords().find((candidate) => candidate.id === id); if (record) openModal({ kind: "source", recordId: id, editing: true, revision: record.revision, title: record.title, text: record.text }); return; }
+  if (name === "pending-confirm" || name === "pending-dismiss") {
+    if (!window.confirm(name === "pending-confirm" ? "确认此条演示记忆？本原型只会在当前页面隐藏此条，不会写入服务端。" : "暂不处理此条？本原型只会在当前页面隐藏此条，不会写入服务端。")) return;
+    if (!state.resolvedPending.includes(id)) state.resolvedPending.push(id);
+    state.selectedPending = state.selectedPending.filter((item) => item !== id);
+    state.notice = "已更新当前原型中的待确认列表（未写入服务端）。"; render(); return;
+  }
+  if (name === "pending-bulk-confirm") {
+    if (!window.confirm("仅对已选的低风险演示项进行本地隐藏？身份核验项仍需逐条处理；不会写入服务端。")) return;
+    state.resolvedPending.push(...state.selectedPending.filter((item) => !state.resolvedPending.includes(item)));
+    state.selectedPending = []; state.notice = "已更新当前原型中的待确认列表（未写入服务端）。"; render(); return;
+  }
   if (name === "close-modal" || name === "backdrop") { closeModal(); return; }
   if (name === "dismiss-error") { state.error = ""; renderMessages(); return; }
   if (name === "assistant-open-mode-sheet") { state.assistantUi.modeSheetOpen = true; state.assistantUi.snoozeSuggestionId = null; state.assistantUi.addContentSheetOpen = false; render(); return; }
@@ -945,7 +995,17 @@ document.addEventListener("input", (event: Event) => {
   if (target.dataset.assistantField === "plan-step-detail") { state.assistantUi.planStepDetailDraft = target.value; return; }
   if (target instanceof HTMLInputElement && target.dataset.assistantField === "confirmation-read") { state.assistantUi.confirmationRead = target.checked; render(); return; }
   const field: string = target.dataset.field ?? "";
-  if (field === "search") { state.search = target.value; element("memory-results").innerHTML = memoryResults(); return; }
+  if (field === "module-query") {
+    state.moduleQuery = target.value;
+    const cursor = target.selectionStart ?? target.value.length;
+    const scrollY = window.scrollY;
+    render();
+    const replacement = document.querySelector<HTMLInputElement>('[data-field="module-query"]');
+    replacement?.focus({ preventScroll: true });
+    replacement?.setSelectionRange(cursor, cursor);
+    window.scrollTo({ top: scrollY, behavior: "instant" });
+    return;
+  }
   if (field === "requirements") state.requirements = target.value;
   else if (field === "record-title") state.recordDraft.title = target.value;
   else if (field === "record-text") state.recordDraft.text = target.value;
@@ -985,6 +1045,19 @@ document.addEventListener("change", (event: Event) => {
   else if (target.dataset.field === "version") { state.artifactVersion = Number(target.value); render(); }
   else if (target.dataset.field === "record-module" && isModule(target.value)) { state.recordDraft.module = target.value; persistDrafts(); }
   else if (target.dataset.field === "record-matter") { state.recordDraft.contextId = target.value; persistDrafts(); }
+});
+document.addEventListener("change", (event: Event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  const id = target.dataset.id;
+  if (!id) return;
+  if (target.dataset.field === "pending-select") {
+    state.selectedPending = target.checked ? [...new Set([...state.selectedPending, id])] : state.selectedPending.filter((item) => item !== id);
+    render();
+  } else if (target.dataset.field === "record-selection") {
+    state.selectedRecordIds = target.checked ? [...new Set([...state.selectedRecordIds, id])] : state.selectedRecordIds.filter((item) => item !== id);
+    render();
+  }
 });
 document.addEventListener("toggle", (event: Event) => {
   if (event.target instanceof HTMLDetailsElement && event.target.dataset.testid === "background-sources" && event.target.isConnected) state.backgroundExpanded = event.target.open;

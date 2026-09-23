@@ -80,6 +80,7 @@ async function staticFile(workspaceRoot: string, pathname: string): Promise<{ by
   else if (pathname === "/_preview/iphone/Bezel.png") { directory = "scripts/assets/iphone"; relative = "Bezel.png"; type = "image/png"; }
   else if (pathname === "/_preview/iphone/status-icons.svg") { directory = "scripts/assets/iphone"; relative = "ios-status-icons.svg"; type = "image/svg+xml"; }
   else if (pathname === "/styles.css") { directory = "web"; relative = "styles.css"; type = "text/css; charset=utf-8"; }
+  else if (pathname === "/modules.css") { directory = "web"; relative = "modules.css"; type = "text/css; charset=utf-8"; }
   else if (/^\/[a-zA-Z0-9_-]+\.js$/.test(pathname)) { directory = "work/h5-build"; relative = pathname.slice(1); type = "text/javascript; charset=utf-8"; }
   else if (/^\/assets\/[a-zA-Z0-9_./-]+\.(png|jpg|jpeg|webp|svg|avif)$/.test(pathname)) {
     directory = "web/assets"; relative = pathname.slice("/assets/".length);
